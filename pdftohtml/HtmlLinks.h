@@ -1,6 +1,8 @@
 #ifndef _HTML_LINKS
 #define _HTML_LINKS
 
+#include <cstddef>
+#include <string.h>
 #include "GVector.h"
 #include "GString.h"
 
