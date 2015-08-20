@@ -120,6 +120,7 @@ public:
   int cmp(const char *sA);
   int cmpN(const char *sA, int n);
 
+    GString *htmlEscape();
 private:
 
   int length;

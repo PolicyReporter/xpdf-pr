@@ -252,11 +252,13 @@ void HtmlPage::addChar(GfxState *state, double x, double y,
  
   // check that new character is in the same direction as current string
   // and is not too far away from it before adding 
+  GBool newString = gFalse;
   if ((UnicodeMap::getDirection(u[0]) != curStr->dir) || 
      (n > 0 && 
       fabs(x1 - curStr->xRight[n-1]) > 0.1 * (curStr->yMax - curStr->yMin))) {
     endString();
     beginString(state, NULL);
+    newString = gTrue;
   }
   state->textTransformDelta(state->getCharSpace() * state->getHorizScaling(),
 			    0, &dx2, &dy2);
@@ -267,6 +269,13 @@ void HtmlPage::addChar(GfxState *state, double x, double y,
     w1 /= uLen;
     h1 /= uLen;
   }
+  
+  // If we find a really huge space, we should probably ignore it
+  // and create a new string on our next call to this function
+  if(!newString && uLen == 1 && static_cast<char>(*u) == ' ' && w1 > (curStr->yMax - curStr->yMin)) {
+      return;
+  }
+
   for (i = 0; i < uLen; ++i) {
     curStr->addChar(state, x1 + i*w1, y1 + i*h1, w1, h1, u[i]);
   }
@@ -390,9 +399,13 @@ void HtmlPage::coalesce() {
   str1 = yxStrings;
   
   hfont1 = getFont(str1);
-  if( hfont1->isBold() )
+  GBool isBold = hfont1->isBold();
+  GBool isItalic = hfont1->isItalic();
+  if( isBold && isItalic )
+      str1->htext->insert(0,"<b><i>",6);
+  else if( isBold )
     str1->htext->insert(0,"<b>",3);
-  if( hfont1->isItalic() )
+  else if( isItalic )
     str1->htext->insert(0,"<i>",3);
   if( str1->getLink() != NULL ) {
     GString *ls = str1->getLink()->getLinkStart();
@@ -460,7 +473,7 @@ void HtmlPage::coalesce() {
       }
       if (addLineBreak) {
 	  str1->text[str1->len] = '\n';
-	  str1->htext->append("<br>");
+	  str1->htext->append("<br />");
 	  str1->xRight[str1->len] = str2->xMin;
 	  ++str1->len;
 	  str1->yMin = str2->yMin;
@@ -487,14 +500,36 @@ void HtmlPage::coalesce() {
       }
 
       /* fix <i> and <b> if str1 and str2 differ */
-      if( hfont1->isBold() && !hfont2->isBold() )
-	str1->htext->append("</b>", 4);
-      if( hfont1->isItalic() && !hfont2->isItalic() )
-	str1->htext->append("</i>", 4);
-      if( !hfont1->isBold() && hfont2->isBold() )
-	str1->htext->append("<b>", 3);
-      if( !hfont1->isItalic() && hfont2->isItalic() )
-	str1->htext->append("<i>", 3);
+      GBool isItalic1 = hfont1->isItalic();
+      GBool isItalic2 = hfont2->isItalic();
+      GBool isBold1 = hfont1->isBold();
+      GBool isBold2 = hfont2->isBold();
+
+      if(!isItalic1 && !isItalic2 && !isBold1 && isBold2) {
+        str1->htext->append("<b>", 3);
+      } else if(!isItalic1 && !isItalic2 && isBold1 && !isBold2) {
+        str1->htext->append("</b>", 4);
+      } else if(!isItalic1 && isItalic2 && !isBold1 && !isBold2) {
+        str1->htext->append("<i>", 3);
+      } else if(!isItalic1 && isItalic2 && !isBold1 && isBold2) {
+        str1->htext->append("<b><i>", 6);
+      } else if(!isItalic1 && isItalic2 && isBold1 && !isBold2) {
+        str1->htext->append("</b><i>", 7);
+      } else if(!isItalic1 && isItalic2 && isBold1 && isBold2) {
+        str1->htext->append("<i>", 3);
+      } else if(isItalic1 && !isItalic2 && !isBold1 && !isBold2) {
+        str1->htext->append("</i>", 4);
+      } else if(isItalic1 && !isItalic2 && !isBold1 && isBold2) {
+        str1->htext->append("</i><b>", 7);
+      } else if(isItalic1 && !isItalic2 && isBold1 && !isBold2) {
+        str1->htext->append("</i></b>", 8);
+      } else if(isItalic1 && !isItalic2 && isBold1 && isBold2) {
+        str1->htext->append("</i>", 4);
+      } else if(isItalic1 && isItalic2 && !isBold1 && isBold2) {
+        str1->htext->append("</i><b><i>", 10);
+      } else if(isItalic1 && isItalic2 && isBold1 && !isBold2) {
+        str1->htext->append("</i></b><i>", 11);
+      }
 
       /* now handle switch of links */
       HtmlLink *hlink1 = str1->getLink();
@@ -523,10 +558,10 @@ void HtmlPage::coalesce() {
       delete str2;
     } else { // keep strings separate
 //      printf("no\n"); 
-      if( hfont1->isBold() )
-	str1->htext->append("</b>",4);
       if( hfont1->isItalic() )
 	str1->htext->append("</i>",4);
+      if( hfont1->isBold() )
+	str1->htext->append("</b>",4);
       if(str1->getLink() != NULL )
 	str1->htext->append("</a>");
      
@@ -534,9 +569,14 @@ void HtmlPage::coalesce() {
       str1 = str2;
       curX = str1->xMin; curY = str1->yMin;
       hfont1 = hfont2;
-      if( hfont1->isBold() )
+
+      GBool isBold = hfont1->isBold();
+      GBool isItalic = hfont1->isItalic();
+      if( isBold && isItalic )
+          str1->htext->insert(0,"<b><i>",6);
+      else if( isBold )
 	str1->htext->insert(0,"<b>",3);
-      if( hfont1->isItalic() )
+      else if( isItalic )
 	str1->htext->insert(0,"<i>",3);
       if( str1->getLink() != NULL ) {
 	GString *ls = str1->getLink()->getLinkStart();
@@ -546,10 +586,10 @@ void HtmlPage::coalesce() {
     }
   }
   str1->xMin = curX; str1->yMin = curY;
-  if( hfont1->isBold() )
-    str1->htext->append("</b>",4);
   if( hfont1->isItalic() )
     str1->htext->append("</i>",4);
+  if( hfont1->isBold() )
+    str1->htext->append("</b>",4);
   if(str1->getLink() != NULL )
     str1->htext->append("</a>");
 
@@ -621,7 +661,7 @@ void HtmlPage::dumpComplex(FILE *file, int page){
 
       htmlEncoding = HtmlOutputDev::mapEncodingToHtml
 	  (globalParams->getTextEncodingName());
-      fprintf(pageFile, "<META http-equiv=\"Content-Type\" content=\"text/html; charset=%s\">\n", htmlEncoding);
+      fprintf(pageFile, "<META http-equiv=\"Content-Type\" content=\"text/html; charset=%s\" />\n", htmlEncoding);
   }
   else 
   {
@@ -630,8 +670,8 @@ void HtmlPage::dumpComplex(FILE *file, int page){
       fprintf(pageFile,"<a name=\"%d\"></a>\n", page);
   } 
   
-  fprintf(pageFile,"<DIV style=\"position:relative;width:%d;height:%d;\">\n",
-	pageWidth, pageHeight);
+  fprintf(pageFile,"<DIV class=\"page\" data-page=\"%d\" style=\"position:relative;width:%dpx;height:%dpx;\">\n",
+	page, pageWidth, pageHeight);
 
   tmp=basename(DocName);
    
@@ -664,10 +704,9 @@ void HtmlPage::dumpComplex(FILE *file, int page){
     if (tmp1->htext){
       str=new GString(tmp1->htext);
       fprintf(pageFile,
-	      "<DIV style=\"position:absolute;top:%d;left:%d\">",
+	      "<DIV class=\"text\" style=\"position:absolute;top:%dpx;left:%dpx\">",
 	      xoutRound(tmp1->yMin),
 	      xoutRound(tmp1->xMin));
-      fputs("<nobr>",pageFile); 
       if (tmp1->fontpos!=-1){
 	str1=fonts->getCSStyle(tmp1->fontpos, str);  
       }
@@ -676,7 +715,7 @@ void HtmlPage::dumpComplex(FILE *file, int page){
       
       delete str;      
       delete str1;
-      fputs("</nobr></DIV>\n",pageFile);
+      fputs("</DIV>\n",pageFile);
     }
   }
 
@@ -702,7 +741,7 @@ void HtmlPage::dump(FILE *f, int pageNum)
     fprintf(f,"<A name=%d></a>",pageNum);
     GString* fName=basename(DocName); 
     for (int i=1;i<HtmlOutputDev::imgNum;i++)
-      fprintf(f,"<IMG src=\"%s-%d_%d.jpg\"><br>\n",fName->getCString(),pageNum,i);
+      fprintf(f,"<IMG src=\"%s-%d_%d.jpg\"><br />\n",fName->getCString(),pageNum,i);
     HtmlOutputDev::imgNum=1;
     delete fName;
 
@@ -712,10 +751,9 @@ void HtmlPage::dump(FILE *f, int pageNum)
 		str=new GString(tmp->htext); 
 		fputs(str->getCString(),f);
 		delete str;      
-		fputs("<br>\n",f);  
+		fputs("<br />\n",f);  
       }
     }
-	fputs("<hr>\n",f);  
   }
 }
 
@@ -779,7 +817,7 @@ GString* HtmlMetaVar::toString()
     result->append(name);
     result->append("\" content=\"");
     result->append(content);
-    result->append("\">"); 
+    result->append("\" />"); 
     return result;
 }
 
@@ -825,7 +863,7 @@ void HtmlOutputDev::doFrame(int firstPage){
   fputs("\n<HEAD>",fContentsFrame);
   fprintf(fContentsFrame,"\n<TITLE>%s</TITLE>",docTitle->getCString());
   htmlEncoding = mapEncodingToHtml(globalParams->getTextEncodingName());
-  fprintf(fContentsFrame, "\n<META http-equiv=\"Content-Type\" content=\"text/html; charset=%s\">\n", htmlEncoding);
+  fprintf(fContentsFrame, "\n<META http-equiv=\"Content-Type\" content=\"text/html; charset=%s\" />\n", htmlEncoding);
   dumpMetaVars(fContentsFrame);
   fprintf(fContentsFrame, "</HEAD>\n");
   fputs("<FRAMESET cols=\"100,*\">\n",fContentsFrame);
@@ -898,7 +936,7 @@ HtmlOutputDev::HtmlOutputDev(char *fileName, char *title,
   	if (doOutline)
 	{
 		GString *str = basename(Docname);
-		fprintf(fContentsFrame, "<A href=\"%s%s\" target=\"contents\">Outline</a><br>", str->getCString(), complexMode ? "-outline.html" : "s.html#outline");
+		fprintf(fContentsFrame, "<A href=\"%s%s\" target=\"contents\">Outline</a><br />", str->getCString(), complexMode ? "-outline.html" : "s.html#outline");
 		delete str;
 	}
   	
@@ -943,11 +981,12 @@ HtmlOutputDev::HtmlOutputDev(char *fileName, char *title,
     else 
     {
       fprintf(page,"%s\n<HTML>\n<HEAD>\n<TITLE>%s</TITLE>\n",
-	      DOCTYPE, docTitle->getCString());
+	      DOCTYPE, docTitle->htmlEscape()->getCString());
       
-      fprintf(page, "<META http-equiv=\"Content-Type\" content=\"text/html; charset=%s\">\n", htmlEncoding);
+      fprintf(page, "<META http-equiv=\"Content-Type\" content=\"text/html; charset=%s\" />\n", htmlEncoding);
       
       dumpMetaVars(page);
+      fprintf(page, "<STYLE type=\"text/css\">\n\tspan{white-space:nowrap;}\n</STYLE>\n", htmlEncoding);
       fprintf(page,"</HEAD>\n");
       fprintf(page,"<BODY bgcolor=\"#A0A0A0\" vlink=\"blue\" link=\"blue\">\n");
     }
@@ -1019,7 +1058,7 @@ void HtmlOutputDev::startPage(int pageNum, GfxState *state) {
 		fprintf(fContentsFrame,"<A href=\"%s-%d.html\"",str->getCString(),pageNum);
       else 
 		fprintf(fContentsFrame,"<A href=\"%ss.html#%d\"",str->getCString(),pageNum);
-      fprintf(fContentsFrame," target=\"contents\" >Page %d</a><br>\n",pageNum);
+      fprintf(fContentsFrame," target=\"contents\" >Page %d</a><br />\n",pageNum);
     }
   }
 
@@ -1041,7 +1080,7 @@ void HtmlOutputDev::endPage() {
   maxPageWidth = pages->pageWidth;
   maxPageHeight = pages->pageHeight;
   
-  //if(!noframes&&!xml) fputs("<br>\n", fContentsFrame);
+  //if(!noframes&&!xml) fputs("<br />\n", fContentsFrame);
   if(!stout && !globalParams->getErrQuiet()) printf("Page-%d\n",(pageNum));
 }
 

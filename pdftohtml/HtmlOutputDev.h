@@ -34,7 +34,7 @@
 
 #define xoutRound(x) ((int)(x + 0.5))
 
-#define DOCTYPE "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\">"
+#define DOCTYPE "<!DOCTYPE HTML>"
 #define DOCTYPE_FRAMES "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Frameset//EN\"\n\"http://www.w3.org/TR/html4/frameset.dtd\">"
 
 class GfxState;

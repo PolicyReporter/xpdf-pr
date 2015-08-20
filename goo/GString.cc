@@ -848,3 +848,19 @@ int GString::cmpN(const char *sA, int n) {
   }
   return 0;
 }
+
+GString *GString::htmlEscape() {
+  GString *tmp = new GString();
+  
+  for (int i = 0; i < length; ++i) {
+    switch (s[i]) { 
+      case '"': tmp->append("&quot;"); break;
+      case '&': tmp->append("&amp;");  break;
+      case '<': tmp->append("&lt;");  break;
+      case '>': tmp->append("&gt;");  break;
+      default: tmp->append(s[i]);
+    }
+  }
+
+  return tmp;
+}

@@ -315,6 +315,7 @@ int HTMLGen::convertPage(
   double r0, g0, b0, r1, g1, b1;
   int colIdx, parIdx, lineIdx, wordIdx;
   int y, i, u;
+  int xMin, yMin;
 
   // generate the background bitmap
   doc->displayPage(splashOut, pg, backgroundResolution, backgroundResolution,
@@ -482,8 +483,10 @@ int HTMLGen::convertPage(
 	  b0 = b1;
 	}
 	s->append("</span>");
-	pf(writeHTML, htmlStream, "<div class=\"txt\" style=\"position:absolute; left:{0:d}px; top:{1:d}px;\">{2:t}</div>\n",
-	   (int)line->getXMin(), (int)line->getYMin(), s);
+        xMin = (int)line->getXMin();
+        yMin = (int)line->getYMin();
+	pf(writeHTML, htmlStream, "<div class=\"txt\" style=\"position:absolute; left:{0:d}px; top:{1:d}px;width:{2:d}px;height:{3:d}\">{4:t}</div>\n",
+	   xMin, yMin, ((int)line->getXMax())-xMin, ((int)line->getYMax())-yMin, s);
 	delete s;
       }
     }
