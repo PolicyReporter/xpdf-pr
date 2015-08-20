@@ -32,17 +32,20 @@
 
 static int firstPage = 1;
 static int lastPage = 0;
-static GBool rawOrder = gTrue;
+static GBool rawOrder = gFalse;
 GBool printCommands = gTrue;
 static GBool printHelp = gFalse;
 GBool printHtml = gFalse;
 GBool complexMode=gFalse;
+GBool discardDuplicates = gFalse;
 GBool ignore=gFalse;
 //char extension[5]=".png";
 double scale=1.5;
 GBool noframes=gFalse;
 GBool stout=gFalse;
 GBool xml=gFalse;
+double blockSpacingFactor = 1;
+GBool noOutline = gFalse;
 GBool errQuiet=gFalse;
 
 GBool showHidden = gFalse;
@@ -74,6 +77,10 @@ static ArgDesc argDesc[] = {
    "exchange .pdf links by .html"}, 
   {"-c",      argFlag,     &complexMode,          0,
    "generate complex document"},
+  {"-d",      argFlag,     &discardDuplicates, 0,
+   "discard duplicates in complex mode (drop shadows, etc.)"},
+  {"-raw",    argFlag,     &rawOrder,      0,
+   "keep strings in content stream order"},
   {"-i",      argFlag,     &ignore,        0,
    "ignore images"},
   {"-noframes", argFlag,   &noframes,      0,
@@ -84,6 +91,10 @@ static ArgDesc argDesc[] = {
    "zoom the pdf document (default 1.5)"},
   {"-xml",    argFlag,    &xml,         0,
    "output for XML post-processing"},
+  {"-space", argFP, &blockSpacingFactor, 0,
+    "barrier for new blocks (default 1.  Smaller numbers = more blocks)"},
+  {"-nooutline", argFlag, &noOutline, 0,
+    "don't show outline in HTML mode"},
   {"-hidden", argFlag,   &showHidden,   0,
    "output hidden text"},
   {"-nomerge", argFlag, &noMerge, 0,
@@ -210,7 +221,9 @@ int main(int argc, char *argv[]) {
    if (complexMode) {
      //noframes=gFalse;
      stout=gFalse;
-   } 
+   } else {
+       discardDuplicates = true;
+   }
 
    if (stout) {
      noframes=gTrue;
@@ -253,8 +266,6 @@ int main(int argc, char *argv[]) {
 		  break;
 	  }
   }}
-
-  rawOrder = complexMode; // todo: figure out what exactly rawOrder do :)
 
   // write text file
   htmlOut = new HtmlOutputDev(htmlFileName->getCString(), 

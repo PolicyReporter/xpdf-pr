@@ -37,12 +37,15 @@ int HtmlOutputDev::imgNum=1;
 
 extern double scale;
 extern GBool complexMode;
+extern GBool discardDuplicates;
 extern GBool ignore;
 extern GBool printCommands;
 extern GBool printHtml;
 extern GBool noframes;
 extern GBool stout;
 extern GBool xml;
+extern double blockSpacingFactor;
+extern GBool noOutline;
 extern GBool showHidden;
 extern GBool noMerge;
 
@@ -359,7 +362,7 @@ void HtmlPage::coalesce() {
   if( !str1 ) return;
 
   //----- discard duplicated text (fake boldface, drop shadows)
-  if( !complexMode )
+  if( discardDuplicates )
   {	/* if not in complex mode get rid of duplicate strings */
 	HtmlString *str3;
 	GBool found;
@@ -443,7 +446,7 @@ void HtmlPage::coalesce() {
 	   ||
 	   (!rawOrder && str2->yMin < str1->yMax)
 	  ) &&
-	  (horSpace > -0.5 * space && horSpace < space)
+	  (horSpace > -0.5 * space && horSpace < blockSpacingFactor * space)
 	 ) ||
        	 (vertSpace >= 0 && vertSpace < 0.5 * space && addLineBreak)
 	) &&
@@ -1451,7 +1454,7 @@ GBool HtmlOutputDev::dumpDocOutline(Catalog* catalog)
 	FILE * output;
 	GBool bClose = gFalse;
 
-	if (!ok || xml)
+	if (!ok || xml || noOutline)
     	return gFalse;
   
 	Object *outlines = catalog->getOutline();
