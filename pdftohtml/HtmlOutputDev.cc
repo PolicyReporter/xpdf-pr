@@ -255,6 +255,7 @@ void HtmlPage::addChar(GfxState *state, double x, double y,
  
   // check that new character is in the same direction as current string
   // and is not too far away from it before adding 
+  // (char)*u holds our current character
   GBool newString = gFalse;
   if ((UnicodeMap::getDirection(u[0]) != curStr->dir) || 
      (n > 0 && 
@@ -417,7 +418,10 @@ void HtmlPage::coalesce(int pageNum) {
   }
   curX = str1->xMin; curY = str1->yMin;
 
+  int j = 0;
   while (str1 && (str2 = str1->yxNext)) {
+    j++;
+    //printf("%d: %s\n", j, str1->htext->getCString());
     hfont2 = getFont(str2);
     space = str1->yMax - str1->yMin;
     horSpace = str2->xMin - str1->xMax;
