@@ -337,7 +337,7 @@ void HtmlPage::endString() {
   curStr = NULL;
 }
 
-void HtmlPage::coalesce() {
+void HtmlPage::coalesce(int pageNum) {
   HtmlString *str1, *str2;
   HtmlFont *hfont1, *hfont2;
   double space, horSpace, vertSpace, vertOverlap;
@@ -1074,7 +1074,7 @@ void HtmlOutputDev::startPage(int pageNum, GfxState *state) {
 
 void HtmlOutputDev::endPage() {
   pages->conv();
-  pages->coalesce();
+  pages->coalesce(pageNum);
   pages->dump(page, pageNum);
   
   // I don't yet know what to do in the case when there are pages of different

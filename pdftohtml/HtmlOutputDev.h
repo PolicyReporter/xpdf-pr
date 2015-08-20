@@ -112,7 +112,7 @@ public:
   void endString();
 
   // Coalesce strings that look like parts of the same line.
-  void coalesce();
+  void coalesce(int pageNum);
 
   // Find a string.  If <top> is true, starts looking at top of page;
   // otherwise starts looking at <xMin>,<yMin>.  If <bottom> is true,
