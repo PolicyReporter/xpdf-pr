@@ -3057,6 +3057,12 @@ void GlobalParams::setPSDuplex(GBool duplex) {
   unlockGlobalParams;
 }
 
+void GlobalParams::setPSNoText(GBool notext) {
+  lockGlobalParams;
+  psNoText = notext;
+  unlockGlobalParams;
+}
+
 void GlobalParams::setPSLevel(PSLevel level) {
   lockGlobalParams;
   psLevel = level;

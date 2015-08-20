@@ -281,6 +281,7 @@ public:
   void setPSShrinkLarger(GBool shrink);
   void setPSCenter(GBool center);
   void setPSLevel(PSLevel level);
+  void setPSNoText(GBool notext);
   void setPSEmbedType1(GBool embed);
   void setPSEmbedTrueType(GBool embed);
   void setPSEmbedCIDPostScript(GBool embed);
@@ -404,6 +405,7 @@ private:
   GBool psShrinkLarger;		// shrink larger pages to fit paper
   GBool psCenter;		// center pages on the paper
   GBool psDuplex;		// enable duplexing in PostScript?
+  GBool psNoText;		// don't output text in PostScript
   PSLevel psLevel;		// PostScript level to generate
   GHash *psResidentFonts;	// 8-bit fonts resident in printer:
 				//   PDF font name mapped to PS font name

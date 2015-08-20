@@ -41,6 +41,25 @@ void setErrorCallback(void (*cbk)(void *data, ErrorCategory category,
   errorCbkData = data;
 }
 
+void CDECL error(int pos, char *msg, ...) {
+  va_list args;
+
+  // NB: this can be called before the globalParams object is created
+  if (globalParams && globalParams->getErrQuiet()) {
+    return;
+  }
+  if (pos >= 0) {
+    fprintf(stderr, "Error (%d): ", pos);
+  } else {
+    fprintf(stderr, "Error: ");
+  }
+  va_start(args, msg);
+  vfprintf(stderr, msg, args);
+  va_end(args);
+  fprintf(stderr, "\n");
+  fflush(stderr);
+}
+
 void CDECL error(ErrorCategory category, GFileOffset pos,
 		 const char *msg, ...) {
   va_list args;
