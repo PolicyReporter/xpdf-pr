@@ -174,7 +174,7 @@ int main(int argc, char *argv[]) {
 
   // check for copy permission
   if (!doc->okToCopy()) {
-    error(-1, "Copying of text from this document is not allowed.");
+    error(errNotAllowed, -1, "Copying of text from this document is not allowed.");
     goto error;
   }
 
@@ -287,7 +287,7 @@ int main(int argc, char *argv[]) {
 
   if (htmlOut->isOk())
   {
-	doc->displayPages(htmlOut, firstPage, lastPage, static_cast<int>(72*scale), static_cast<int>(72*scale), 0, gTrue, gTrue);
+	doc->displayPages(htmlOut, firstPage, lastPage, static_cast<int>(72*scale), static_cast<int>(72*scale), 0, gTrue, gTrue, gTrue);
   	if (!xml)
 	{
 		htmlOut->dumpDocOutline(doc->getCatalog());
@@ -306,9 +306,9 @@ int main(int argc, char *argv[]) {
     globalParams->setPSPaperWidth(w);
     globalParams->setPSPaperHeight(h);
     globalParams->setPSNoText(gTrue);
-    psOut = new PSOutputDev(psFileName->getCString(), doc->getXRef(),
-			    doc->getCatalog(), firstPage, lastPage, psModePS);
-    doc->displayPages(psOut, firstPage, lastPage, static_cast<int>(72*scale), static_cast<int>(72*scale), 0, gTrue, gTrue);
+    psOut = new PSOutputDev(psFileName->getCString(), doc,
+			    firstPage, lastPage, psModePS);
+    doc->displayPages(psOut, firstPage, lastPage, static_cast<int>(72*scale), static_cast<int>(72*scale), 0, gTrue, gTrue, gTrue);
     delete psOut;
 
     /*sprintf(buf, "%s -sDEVICE=png16m -dBATCH -dNOPROMPT -dNOPAUSE -r72 -sOutputFile=%s%%03d.png -g%dx%d -q %s", GHOSTSCRIPT, htmlFileName->getCString(), w, h,
