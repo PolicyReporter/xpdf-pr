@@ -1,26 +1,27 @@
 
 SHELL = /bin/sh
 
-SRCDIR = .
-XPDFSRCDIR = ../xpdf
+srcdir = @srcdir@
+
+XPDFSRCDIR = $(srcdir)/../xpdf
 XPDFLIBDIR = ../xpdf
-GOOSRCDIR = ../goo
+GOOSRCDIR = $(srcdir)/../goo
 GOOLIBDIR = ../goo
-FOFISRCDIR = ../fofi
+FOFISRCDIR = $(srcdir)/../fofi
 FOFILIBDIR = ../fofi
-SPLASHSRCDIR = ../splash
+SPLASHSRCDIR = $(srcdir)/../splash
 SPLASHLIBDIR = ../splash
 
-CXXFLAGS = -g -O2 -DHAVE_CONFIG_H -DHAVE_DIRENT_H=1  -I.. -DHAVE_REWINDDIR=1 -DHAVE_POPEN=1 -I.. -I$(GOOSRCDIR) -I$(XPDFSRCDIR) -I$(FOFISRCDIR) -I$(SPLASHSRCDIR) -I$(srcdir)           -I/usr/X11R6/include
+CXXFLAGS = -fpermissive -Wno-write-strings @CXXFLAGS@ @DEFS@ -DHAVE_DIRENT_H=1 -DHAVE_REWINDDIR=1 -DHAVE_POPEN=1 -I.. -I$(srcdir)/.. -I$(GOOSRCDIR) -I$(FOFISRCDIR) -I$(SPLASHSRCDIR) -I$(srcdir) -I$(XPDFSRCDIR) -I/usr/X11R6/include @freetype2_CFLAGS@ @Sgm_CFLAGS@ @Xm_CFLAGS@ @Xt_CFLAGS@ @Xp_CFLAGS@ @Xext_CFLAGS@ @Xpm_CFLAGS@ @libpng_CFLAGS@ @libpaper_CFLAGS@ @X_CFLAGS@ @EXTRA_CFLAGS@
 
-LDFLAGS = 
+LDFLAGS = @LDFLAGS@
 
-OTHERLIBS = 
+OTHERLIBS = @LIBS@ @libpaper_LIBS@ @EXTRA_LIBS@
 
-CXX ?= c++
+CXX = @CXX@
 
-LIBPREFIX = lib
-EXE = 
+LIBPREFIX = @LIBPREFIX@
+EXE = @EXE@
 
 #------------------------------------------------------------------------
 
@@ -32,10 +33,10 @@ EXE =
 #------------------------------------------------------------------------
 
 CXX_SRC = \
-	$(SRCDIR)/pdftohtml.cc \
-	$(SRCDIR)/HtmlOutputDev.cc \
-	$(SRCDIR)/HtmlFonts.cc \
-	$(SRCDIR)/HtmlLinks.cc 
+	$(srcdir)/pdftohtml.cc \
+	$(srcdir)/HtmlOutputDev.cc \
+	$(srcdir)/HtmlFonts.cc \
+	$(srcdir)/HtmlLinks.cc 
 
 #------------------------------------------------------------------------
 

@@ -5563,6 +5563,10 @@ if test "$xpdf_cv_func_std_sort" = yes; then
 
 fi
 
+cat >>confdefs.h <<_ACEOF
+#define GHOSTSCRIPT "gs"
+_ACEOF
+
 ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -8074,7 +8078,7 @@ EXTRA_CFLAGS=
 
 
 
-ac_config_files="$ac_config_files Makefile goo/Makefile fofi/Makefile splash/Makefile xpdf/Makefile"
+ac_config_files="$ac_config_files Makefile goo/Makefile fofi/Makefile splash/Makefile xpdf/Makefile pdftohtml/Makefile"
 
 cat >confcache <<\_ACEOF
 # This file is a shell script that caches the results of configure
@@ -8772,6 +8776,7 @@ do
     "fofi/Makefile") CONFIG_FILES="$CONFIG_FILES fofi/Makefile" ;;
     "splash/Makefile") CONFIG_FILES="$CONFIG_FILES splash/Makefile" ;;
     "xpdf/Makefile") CONFIG_FILES="$CONFIG_FILES xpdf/Makefile" ;;
+    "pdftohtml/Makefile") CONFIG_FILES="$CONFIG_FILES pdftohtml/Makefile" ;;
 
   *) as_fn_error $? "invalid argument: \`$ac_config_target'" "$LINENO" 5;;
   esac
