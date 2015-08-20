@@ -33,9 +33,9 @@ extern GBool xml;
 GString* HtmlFont::DefaultFont=new GString("Times"); // Arial,Helvetica,sans-serif
 
 HtmlFontColor::HtmlFontColor(GfxRGB rgb){
-  r=static_cast<int>(255*rgb.r);
-  g=static_cast<int>(255*rgb.g);
-  b=static_cast<int>(255*rgb.b);
+  r=colToDbl(rgb.r);
+  g=colToDbl(rgb.g);
+  b=colToDbl(rgb.b);
   if (!(Ok(r)&&Ok(b)&&Ok(g))) {printf("Error : Bad color \n");r=0;g=0;b=0;}
 }
 
