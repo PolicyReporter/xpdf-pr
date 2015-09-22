@@ -8,7 +8,7 @@
 
 class HtmlLink{
 
-private:  
+private:
   double Xmin;
   double Ymin;
   double Xmax;
@@ -21,7 +21,7 @@ public:
   HtmlLink& operator=(const HtmlLink& x);
   HtmlLink(double xmin,double ymin,double xmax,double ymax,GString *_dest);
   ~HtmlLink();
-  GBool HtmlLink::isEqualDest(const HtmlLink& x) const;
+  GBool isEqualDest(const HtmlLink& x) const;
   GString *getDest(){return new GString(dest);}
   double getX1() const {return Xmin;}
   double getX2() const {return Xmax;}
@@ -30,7 +30,7 @@ public:
   GBool inLink(double xmin,double ymin,double xmax,double ymax) const ;
   //GString *Link(GString *content);
   GString* getLinkStart();
-  
+
 };
 
 class HtmlLinks{
@@ -46,4 +46,4 @@ public:
 };
 
 #endif
-   
+
