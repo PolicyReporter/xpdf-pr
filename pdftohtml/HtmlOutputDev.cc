@@ -823,7 +823,7 @@ GString* HtmlMetaVar::toString()
     GString *result = new GString("<META name=\"");
     result->append(name);
     result->append("\" content=\"");
-    result->append(content);
+    result->append(content->htmlEscape());
     result->append("\" />"); 
     return result;
 }
