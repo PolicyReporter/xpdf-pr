@@ -45,8 +45,8 @@ all: pdftohtml$(EXE)
 #-------------------------------------------------------------------------
 
 PDFTOHTML_OBJS = HtmlOutputDev.o HtmlFonts.o HtmlLinks.o \
-    pdftohtml.o
-PDFTOHTML_LIBS = -L$(GOOLIBDIR) -L$(FOFILIBDIR) -L$(SPLASHLIBDIR) -L$(XPDFLIBDIR) $(OTHERLIBS) -lXpdf -lGoo -lfofi -lsplash -lm
+    pdftohtml.o ../xpdf/SplashOutputDev.o
+PDFTOHTML_LIBS = -L$(GOOLIBDIR) -L$(FOFILIBDIR) -L$(SPLASHLIBDIR) -L$(XPDFLIBDIR) $(OTHERLIBS) -lXpdf -lGoo -lfofi -lsplash -lm @freetype2_LIBS@
 
 pdftohtml$(EXE): $(PDFTOHTML_OBJS) $(GOOLIBDIR)/$(LIBPREFIX)Goo.a
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o pdftohtml$(EXE) $(PDFTOHTML_OBJS) \
