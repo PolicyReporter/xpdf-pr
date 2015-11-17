@@ -1,7 +1,7 @@
 Summary: A PDF file viewer for the X Window System
 Name: xpdf-pr
 Version: 3.04
-Release: 11%{?dist}
+Release: 12%{?dist}
 License: GPLv2 or GPLv3
 Epoch: 1
 Url: https://github.com/PolicyReporter/xpdf-pr
