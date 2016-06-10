@@ -12,6 +12,7 @@ prefix = @prefix@
 srcdir = @srcdir@
 VPATH = @srcdir@
 
+XPDFSRCDIR = $(srcdir)/../xpdf
 GOOSRCDIR = $(srcdir)/../goo
 GOOLIBDIR = ../goo
 FOFISRCDIR = $(srcdir)/../fofi

@@ -196,18 +196,23 @@ GString* HtmlFont::HtmlFilter(Unicode* u, int uLen) {
   }
 
   for (int i = 0; i < uLen; ++i) {
-    switch (u[i])
-      { 
-	case '"': tmp->append("&quot;");  break;
-	case '&': tmp->append("&amp;");  break;
-	case '<': tmp->append("&lt;");  break;
-	case '>': tmp->append("&gt;");  break;
-	default:  
-	  {
-	    // convert unicode to string
-	    if ((n = uMap->mapUnicode(u[i], buf, sizeof(buf))) > 0) {
-	      tmp->append(buf, n); 
-	  }
+    switch (u[i]) {
+      case '"': tmp->append("&quot;");  break;
+      case '&': tmp->append("&amp;");  break;
+      case '<': tmp->append("&lt;");  break;
+      case '>': tmp->append("&gt;");  break;
+      default: {
+      // convert unicode to string
+        n = uMap->mapUnicode(u[i], buf, sizeof(buf));
+        for(int j = 0; j < n; j++) {
+          switch (buf[j]) {
+            case '"': tmp->append("&quot;");  break;
+            case '&': tmp->append("&amp;");  break;
+            case '<': tmp->append("&lt;");  break;
+            case '>': tmp->append("&gt;");  break;
+            default: tmp->append(buf[j]);
+          }
+        }
       }
     }
   }
