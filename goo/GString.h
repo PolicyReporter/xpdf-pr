@@ -88,6 +88,9 @@ public:
   // Change <i>th character.
   void setChar(int i, char c) { s[i] = c; }
 
+  // Replace a character with another
+  GString *replaceChar(char oldChar, char newChar);
+
   // Clear string to zero length.
   GString *clear();
 

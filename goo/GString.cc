@@ -864,3 +864,13 @@ GString *GString::htmlEscape() {
 
   return tmp;
 }
+
+GString *GString::replaceChar(char oldChar, char newChar) {
+    int i;
+    for (i = 0; i < length; ++i) {
+        if (s[i] == oldChar) {
+            s[i] = newChar;
+        }
+    }
+    return this;
+}
