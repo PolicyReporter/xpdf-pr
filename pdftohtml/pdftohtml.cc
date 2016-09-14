@@ -267,6 +267,24 @@ int main(int argc, char *argv[]) {
 	  }
   }}
 
+  docTitle->replaceChar('\r', ' ');
+  docTitle->replaceChar('\n', ' ');
+  if (author) {
+    author->replaceChar('\r', ' ');
+    author->replaceChar('\n', ' ');
+  }
+  if (keywords) {
+    keywords->replaceChar('\r', ' ');
+    keywords->replaceChar('\n', ' ');
+  }
+  if (subject) {
+    subject->replaceChar('\r', ' ');
+    subject->replaceChar('\n', ' ');
+  }
+  if (date) {
+    date->replaceChar('\r', ' ');
+    date->replaceChar('\n', ' ');
+  }
   // write text file
   htmlOut = new HtmlOutputDev(htmlFileName->getCString(), 
 	  docTitle->getCString(), 
