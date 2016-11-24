@@ -428,7 +428,7 @@ void HtmlPage::coalesce(int pageNum) {
     addLineBreak = !noMerge && (fabs(str1->xMin - str2->xMin) < 0.4);
     vertSpace = str2->yMin - str1->yMax;
 
-//printf("coalesce %d %d %f? ", str1->dir, str2->dir, d);
+//printf("coalesce %d %d ? ", str1->dir, str2->dir);
 
     if (str2->yMin >= str1->yMin && str2->yMin <= str1->yMax)
     {
@@ -1109,6 +1109,8 @@ void HtmlOutputDev::drawChar(GfxState *state, double x, double y,
 	      CharCode code, int nBytes, Unicode *u, int uLen) 
 {
   if ( !showHidden && (state->getRender() & 3) == 3) {
+    // hack to render OCR text
+    pages->addChar(state, x, y, dx, dy, originX, originY, u, uLen);
     return;
   }
   pages->addChar(state, x, y, dx, dy, originX, originY, u, uLen);
