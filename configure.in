@@ -287,7 +287,7 @@ fi
 
 dnl ##### Check for libXpm.
 if test -z "$no_x"; then
-  smr_CHECK_LIB(Xpm, Xpm, [pixmap library - used only for icon], 
+  smr_CHECK_LIB(Xpm, Xpm, [pixmap library - used only for icon],
                 XpmCreatePixmapFromData, X11/xpm.h,
                 $X_LIBS $X_PRE_LIBS $X_EXTRA_LIBS -lX11, $X_CFLAGS)
   AC_SUBST(Xpm_LIBS)
@@ -299,23 +299,23 @@ if test -z "$no_x"; then
   dnl # XextAddDisplay isn't defined in any header file, so we provide a
   dnl # bogus prototype (so the compiler doesn't complain) and a bogus
   dnl # header file (so the smr macro doesn't break).
-  smr_CHECK_LIB(Xext, Xext, [Motif library], 
+  smr_CHECK_LIB(Xext, Xext, [Motif library],
                 XextAddDisplay, X11/Xlib.h,
                 $X_LIBS $X_PRE_LIBS $X_EXTRA_LIBS -lX11, $X_CFLAGS,
                 [int XextAddDisplay();])
   AC_SUBST(Xext_LIBS)
   AC_SUBST(Xext_CFLAGS)
-  smr_CHECK_LIB(Xp, Xp, [Motif library], 
+  smr_CHECK_LIB(Xp, Xp, [Motif library],
                 XpStartPage, X11/extensions/Print.h,
                 $X_LIBS $X_PRE_LIBS $Xext_LIBS $X_EXTRA_LIBS -lX11, $X_CFLAGS)
   AC_SUBST(Xp_LIBS)
   AC_SUBST(Xp_CFLAGS)
-  smr_CHECK_LIB(Xt, Xt, [Motif library], 
+  smr_CHECK_LIB(Xt, Xt, [Motif library],
                 XtAppInitialize, X11/Intrinsic.h,
                 $X_LIBS $X_PRE_LIBS $X_EXTRA_LIBS -lX11, $X_CFLAGS)
   AC_SUBST(Xt_LIBS)
   AC_SUBST(Xt_CFLAGS)
-  smr_CHECK_LIB(Xm, Xm, [Motif library], 
+  smr_CHECK_LIB(Xm, Xm, [Motif library],
                 XmCreateForm, Xm/XmAll.h,
                 $Xt_LIBS $X_LIBS $X_PRE_LIBS $Xp_LIBS $Xext_LIBS $X_EXTRA_LIBS -lX11, $X_CFLAGS)
   AC_SUBST(Xm_LIBS)
@@ -374,7 +374,7 @@ AC_SUBST(EXTRA_LIBS)
 AC_SUBST(EXTRA_CFLAGS)
 
 dnl ##### Write the makefiles.
-AC_OUTPUT(Makefile goo/Makefile fofi/Makefile splash/Makefile xpdf/Makefile)
+AC_OUTPUT(Makefile goo/Makefile fofi/Makefile splash/Makefile xpdf/Makefile pdftohtml/Makefile)
 
 dnl ##### Warn user if X is missing.
 if test -n "$no_x" -o "x$smr_have_Xm_library" != xyes -o "x$smr_have_freetype2_library" != xyes; then
