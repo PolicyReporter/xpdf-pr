@@ -29,6 +29,7 @@
 #include "Error.h"
 #include "config.h"
 #include "gfile.h"
+#define GHOSTSCRIPT "gs"
 
 static int firstPage = 1;
 static int lastPage = 0;
@@ -74,7 +75,7 @@ static ArgDesc argDesc[] = {
   {"-help",   argFlag,     &printHelp,     0,
    "print usage information"},
   {"-p",      argFlag,     &printHtml,     0,
-   "exchange .pdf links by .html"}, 
+   "exchange .pdf links by .html"},
   {"-c",      argFlag,     &complexMode,          0,
    "generate complex document"},
   {"-d",      argFlag,     &discardDuplicates, 0,
@@ -98,7 +99,7 @@ static ArgDesc argDesc[] = {
   {"-hidden", argFlag,   &showHidden,   0,
    "output hidden text"},
   {"-nomerge", argFlag, &noMerge, 0,
-   "do not merge paragraphs"},   
+   "do not merge paragraphs"},
   {"-enc",    argString,   textEncName,    sizeof(textEncName),
    "output text encoding name"},
   {"-dev",    argString,   gsDevice,       sizeof(gsDevice),
@@ -139,7 +140,7 @@ int main(int argc, char *argv[]) {
     }
     exit(1);
   }
- 
+
   // init error file
   //errorInit();
 
@@ -154,7 +155,7 @@ int main(int argc, char *argv[]) {
   if (textEncName[0]) {
     globalParams->setTextEncoding(textEncName);
     if( !globalParams->getTextEncoding() )  {
-	goto error;    
+	goto error;
     }
   }
 
@@ -198,12 +199,12 @@ int main(int argc, char *argv[]) {
 	htmlFileName = new GString(tmp->getCString(),
 				   tmp->getLength() - 5);
       else htmlFileName =new GString(tmp);
-    else   
+    else
       if (!strcmp(p, ".xml") || !strcmp(p, ".XML"))
 	htmlFileName = new GString(tmp->getCString(),
 				   tmp->getLength() - 5);
       else htmlFileName =new GString(tmp);
-    
+
     delete tmp;
   } else {
     p = fileName->getCString() + fileName->getLength() - 4;
@@ -214,10 +215,10 @@ int main(int argc, char *argv[]) {
       htmlFileName = fileName->copy();
     //   htmlFileName->append(".html");
   }
-  
+
    if (scale>3.0) scale=3.0;
    if (scale<0.5) scale=0.5;
-   
+
    if (complexMode) {
      //noframes=gFalse;
      stout=gFalse;
@@ -231,7 +232,7 @@ int main(int argc, char *argv[]) {
    }
 
    if (xml)
-   { 
+   {
        complexMode = gTrue;
        noframes = gTrue;
        noMerge = gTrue;
@@ -286,19 +287,19 @@ int main(int argc, char *argv[]) {
     date->replaceChar('\n', ' ');
   }
   // write text file
-  htmlOut = new HtmlOutputDev(htmlFileName->getCString(), 
-	  docTitle->getCString(), 
+  htmlOut = new HtmlOutputDev(htmlFileName->getCString(),
+	  docTitle->getCString(),
 	  author ? author->getCString() : NULL,
-	  keywords ? keywords->getCString() : NULL, 
-          subject ? subject->getCString() : NULL, 
+	  keywords ? keywords->getCString() : NULL,
+          subject ? subject->getCString() : NULL,
 	  date ? date->getCString() : NULL,
 	  extension,
-	  rawOrder, 
+	  rawOrder,
 	  firstPage,
 	  doc->getCatalog()->getOutline()->isDict());
   delete docTitle;
   if( author )
-  {   
+  {
       delete author;
   }
   if( keywords )
@@ -322,7 +323,7 @@ int main(int argc, char *argv[]) {
 		htmlOut->dumpDocOutline(doc->getCatalog());
 	}
   }
-  
+
   if( complexMode && !xml && !ignore ) {
     int h=xoutRound(htmlOut->getPageHeight()/scale);
     int w=xoutRound(htmlOut->getPageWidth()/scale);
@@ -342,7 +343,7 @@ int main(int argc, char *argv[]) {
 
     /*sprintf(buf, "%s -sDEVICE=png16m -dBATCH -dNOPROMPT -dNOPAUSE -r72 -sOutputFile=%s%%03d.png -g%dx%d -q %s", GHOSTSCRIPT, htmlFileName->getCString(), w, h,
       psFileName->getCString());*/
-    
+
     GString *gsCmd = new GString(GHOSTSCRIPT);
     GString *tw, *th, *sc;
     gsCmd->append(" -sDEVICE=");
@@ -375,7 +376,7 @@ int main(int argc, char *argv[]) {
     delete gsCmd;
     delete psFileName;
   }
-  
+
   delete htmlOut;
 
   // clean up
@@ -385,7 +386,7 @@ int main(int argc, char *argv[]) {
 
   if(htmlFileName) delete htmlFileName;
   HtmlFont::clear();
-  
+
   // check for memory leaks
   Object::memCheck(stderr);
   gMemReport(stderr);
@@ -441,4 +442,3 @@ static GString* getInfoDate(Dict *infoDict, char *key) {
   obj.free();
   return result;
 }
-
