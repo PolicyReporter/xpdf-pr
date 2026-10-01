@@ -13,10 +13,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "gtypes.h"
 #include "CharTypes.h"
 
@@ -32,13 +28,6 @@ enum UnicodeMapKind {
   unicodeMapUser,		// read from a file
   unicodeMapResident,		// static list of ranges
   unicodeMapFunc		// function pointer
-};
-
-enum UnicodeTextDirection {
-  textDirUnknown,
-  textDirLeftRight,
-  textDirRightLeft,
-  textDirTopBottom
 };
 
 typedef int (*UnicodeMapFunc)(Unicode u, char *buf, int bufSize);
@@ -87,10 +76,6 @@ public:
   // Returns 0 if no mapping is found.
   int mapUnicode(Unicode u, char *buf, int bufSize);
 
-  // determines the direction of the text by checking 
-  // unicode ranges
-  static enum UnicodeTextDirection getDirection(Unicode u);
-
 private:
 
   UnicodeMap(GString *encodingNameA);
@@ -105,9 +90,10 @@ private:
   int len;			// (user, resident)
   UnicodeMapExt *eMaps;		// (user)
   int eMapsLen;			// (user)
-  int refCnt;
 #if MULTITHREADED
-  GMutex mutex;
+  GAtomicCounter refCnt;
+#else
+  int refCnt;
 #endif
 };
 

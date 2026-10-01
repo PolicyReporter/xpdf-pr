@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include <stdio.h>
 #include "config.h"
 #include "gfile.h"
@@ -34,12 +30,15 @@ enum ErrorCategory {
   errInternal		// internal error - malfunction within the Xpdf code
 };
 
+extern const char *errorCategoryNames[];
+
 extern void setErrorCallback(void (*cbk)(void *data, ErrorCategory category,
 					 int pos, char *msg),
 			     void *data);
 
+extern void *getErrorCallbackData();
+
 extern void CDECL error(ErrorCategory category, GFileOffset pos,
 			const char *msg, ...);
-extern void CDECL error(int pos, char *msg, ...);
 
 #endif

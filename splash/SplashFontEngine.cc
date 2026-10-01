@@ -8,17 +8,15 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdlib.h>
 #include <stdio.h>
 #ifndef _WIN32
 #  include <unistd.h>
 #endif
 #include "gmem.h"
+#include "gmempp.h"
 #include "GString.h"
+#include "GList.h"
 #include "SplashMath.h"
 #include "SplashFTFontEngine.h"
 #include "SplashFontFile.h"
@@ -37,7 +35,7 @@ extern "C" int unlink(char *filename);
 //------------------------------------------------------------------------
 
 SplashFontEngine::SplashFontEngine(
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+#if HAVE_FREETYPE_H
 				   GBool enableFreeType,
 				   Guint freeTypeFlags,
 #endif
@@ -47,8 +45,9 @@ SplashFontEngine::SplashFontEngine(
   for (i = 0; i < splashFontCacheSize; ++i) {
     fontCache[i] = NULL;
   }
+  badFontFiles = new GList();
 
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+#if HAVE_FREETYPE_H
   if (enableFreeType) {
     ftEngine = SplashFTFontEngine::init(aa, freeTypeFlags);
   } else {
@@ -65,8 +64,9 @@ SplashFontEngine::~SplashFontEngine() {
       delete fontCache[i];
     }
   }
+  deleteGList(badFontFiles, SplashFontFileID);
 
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+#if HAVE_FREETYPE_H
   if (ftEngine) {
     delete ftEngine;
   }
@@ -88,6 +88,15 @@ SplashFontFile *SplashFontEngine::getFontFile(SplashFontFileID *id) {
   return NULL;
 }
 
+GBool SplashFontEngine::checkForBadFontFile(SplashFontFileID *id) {
+  for (int i = 0; i < badFontFiles->getLength(); ++i) {
+    if (((SplashFontFileID *)badFontFiles->get(i))->matches(id)) {
+      return gTrue;
+    }
+  }
+  return gFalse;
+}
+
 SplashFontFile *SplashFontEngine::loadType1Font(SplashFontFileID *idA,
 #if LOAD_FONTS_FROM_MEM
 						GString *fontBuf,
@@ -99,7 +108,7 @@ SplashFontFile *SplashFontEngine::loadType1Font(SplashFontFileID *idA,
   SplashFontFile *fontFile;
 
   fontFile = NULL;
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+#if HAVE_FREETYPE_H
   if (!fontFile && ftEngine) {
     fontFile = ftEngine->loadType1Font(idA,
 #if LOAD_FONTS_FROM_MEM
@@ -111,7 +120,7 @@ SplashFontFile *SplashFontEngine::loadType1Font(SplashFontFileID *idA,
   }
 #endif
 
-#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32)
+#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32) && !defined(__ANDROID__)
   // delete the (temporary) font file -- with Unix hard link
   // semantics, this will remove the last link; otherwise it will
   // return an error, leaving the file to be deleted later (if
@@ -120,6 +129,10 @@ SplashFontFile *SplashFontEngine::loadType1Font(SplashFontFileID *idA,
     unlink(fontFile ? fontFile->fileName->getCString() : fileName);
   }
 #endif
+
+  if (!fontFile) {
+    badFontFiles->append(idA);
+  }
 
   return fontFile;
 }
@@ -131,11 +144,15 @@ SplashFontFile *SplashFontEngine::loadType1CFont(SplashFontFileID *idA,
 						 char *fileName,
 						 GBool deleteFile,
 #endif
+						 int *codeToGID,
 						 const char **enc) {
   SplashFontFile *fontFile;
 
   fontFile = NULL;
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+  if (!fontFile) {
+    gfree(codeToGID);
+  }
+#if HAVE_FREETYPE_H
   if (!fontFile && ftEngine) {
     fontFile = ftEngine->loadType1CFont(idA,
 #if LOAD_FONTS_FROM_MEM
@@ -147,7 +164,7 @@ SplashFontFile *SplashFontEngine::loadType1CFont(SplashFontFileID *idA,
   }
 #endif
 
-#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32)
+#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32) && !defined(__ANDROID__)
   // delete the (temporary) font file -- with Unix hard link
   // semantics, this will remove the last link; otherwise it will
   // return an error, leaving the file to be deleted later (if
@@ -156,6 +173,10 @@ SplashFontFile *SplashFontEngine::loadType1CFont(SplashFontFileID *idA,
     unlink(fontFile ? fontFile->fileName->getCString() : fileName);
   }
 #endif
+
+  if (!fontFile) {
+    badFontFiles->append(idA);
+  }
 
   return fontFile;
 }
@@ -167,11 +188,15 @@ SplashFontFile *SplashFontEngine::loadOpenTypeT1CFont(SplashFontFileID *idA,
 						      char *fileName,
 						      GBool deleteFile,
 #endif
+						      int *codeToGID,
 						      const char **enc) {
   SplashFontFile *fontFile;
 
   fontFile = NULL;
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+  if (!fontFile) {
+    gfree(codeToGID);
+  }
+#if HAVE_FREETYPE_H
   if (!fontFile && ftEngine) {
     fontFile = ftEngine->loadOpenTypeT1CFont(idA,
 #if LOAD_FONTS_FROM_MEM
@@ -183,7 +208,7 @@ SplashFontFile *SplashFontEngine::loadOpenTypeT1CFont(SplashFontFileID *idA,
   }
 #endif
 
-#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32)
+#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32) && !defined(__ANDROID__)
   // delete the (temporary) font file -- with Unix hard link
   // semantics, this will remove the last link; otherwise it will
   // return an error, leaving the file to be deleted later (if
@@ -192,34 +217,43 @@ SplashFontFile *SplashFontEngine::loadOpenTypeT1CFont(SplashFontFileID *idA,
     unlink(fontFile ? fontFile->fileName->getCString() : fileName);
   }
 #endif
+
+  if (!fontFile) {
+    badFontFiles->append(idA);
+  }
 
   return fontFile;
 }
 
 SplashFontFile *SplashFontEngine::loadCIDFont(SplashFontFileID *idA,
 #if LOAD_FONTS_FROM_MEM
-					      GString *fontBuf
+					      GString *fontBuf,
 #else
 					      char *fileName,
-					      GBool deleteFile
+					      GBool deleteFile,
 #endif
-					      ) {
+					      int *codeToGID,
+					      int codeToGIDLen) {
   SplashFontFile *fontFile;
 
   fontFile = NULL;
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+#if HAVE_FREETYPE_H
   if (!fontFile && ftEngine) {
     fontFile = ftEngine->loadCIDFont(idA,
 #if LOAD_FONTS_FROM_MEM
-				     fontBuf
+				     fontBuf,
 #else
-				     fileName, deleteFile
+				     fileName, deleteFile,
 #endif
-				     );
+				     codeToGID, codeToGIDLen);
   }
 #endif
 
-#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32)
+  if (!fontFile) {
+    gfree(codeToGID);
+  }
+
+#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32) && !defined(__ANDROID__)
   // delete the (temporary) font file -- with Unix hard link
   // semantics, this will remove the last link; otherwise it will
   // return an error, leaving the file to be deleted later (if
@@ -228,6 +262,10 @@ SplashFontFile *SplashFontEngine::loadCIDFont(SplashFontFileID *idA,
     unlink(fontFile ? fontFile->fileName->getCString() : fileName);
   }
 #endif
+
+  if (!fontFile) {
+    badFontFiles->append(idA);
+  }
 
   return fontFile;
 }
@@ -244,7 +282,7 @@ SplashFontFile *SplashFontEngine::loadOpenTypeCFFFont(SplashFontFileID *idA,
   SplashFontFile *fontFile;
 
   fontFile = NULL;
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+#if HAVE_FREETYPE_H
   if (!fontFile && ftEngine) {
     fontFile = ftEngine->loadOpenTypeCFFFont(idA,
 #if LOAD_FONTS_FROM_MEM
@@ -256,7 +294,11 @@ SplashFontFile *SplashFontEngine::loadOpenTypeCFFFont(SplashFontFileID *idA,
   }
 #endif
 
-#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32)
+  if (!fontFile) {
+    gfree(codeToGID);
+  }
+
+#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32) && !defined(__ANDROID__)
   // delete the (temporary) font file -- with Unix hard link
   // semantics, this will remove the last link; otherwise it will
   // return an error, leaving the file to be deleted later (if
@@ -265,6 +307,10 @@ SplashFontFile *SplashFontEngine::loadOpenTypeCFFFont(SplashFontFileID *idA,
     unlink(fontFile ? fontFile->fileName->getCString() : fileName);
   }
 #endif
+
+  if (!fontFile) {
+    badFontFiles->append(idA);
+  }
 
   return fontFile;
 }
@@ -283,7 +329,7 @@ SplashFontFile *SplashFontEngine::loadTrueTypeFont(SplashFontFileID *idA,
   SplashFontFile *fontFile;
 
   fontFile = NULL;
-#if HAVE_FREETYPE_FREETYPE_H || HAVE_FREETYPE_H
+#if HAVE_FREETYPE_H
   if (!fontFile && ftEngine) {
     fontFile = ftEngine->loadTrueTypeFont(idA,
 #if LOAD_FONTS_FROM_MEM
@@ -299,7 +345,7 @@ SplashFontFile *SplashFontEngine::loadTrueTypeFont(SplashFontFileID *idA,
     gfree(codeToGID);
   }
 
-#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32)
+#if !LOAD_FONTS_FROM_MEM && !defined(_WIN32) && !defined(__ANDROID__)
   // delete the (temporary) font file -- with Unix hard link
   // semantics, this will remove the last link; otherwise it will
   // return an error, leaving the file to be deleted later (if
@@ -308,6 +354,10 @@ SplashFontFile *SplashFontEngine::loadTrueTypeFont(SplashFontFileID *idA,
     unlink(fontFile ? fontFile->fileName->getCString() : fileName);
   }
 #endif
+
+  if (!fontFile) {
+    badFontFiles->append(idA);
+  }
 
   return fontFile;
 }

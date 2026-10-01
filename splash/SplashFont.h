@@ -11,12 +11,9 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "gtypes.h"
 #include "SplashTypes.h"
+#include "SplashMath.h"
 
 struct SplashGlyphBitmap;
 struct SplashFontCacheTag;
@@ -54,10 +51,14 @@ public:
   GBool matches(SplashFontFile *fontFileA, SplashCoord *matA,
 		SplashCoord *textMatA) {
     return fontFileA == fontFile &&
-           matA[0] == mat[0] && matA[1] == mat[1] &&
-           matA[2] == mat[2] && matA[3] == mat[3] &&
-           textMatA[0] == textMat[0] && textMatA[1] == textMat[1] &&
-           textMatA[2] == textMat[2] && textMatA[3] == textMat[3];
+           splashAbs(matA[0] - mat[0]) < 0.0001 &&
+	   splashAbs(matA[1] - mat[1]) < 0.0001 &&
+           splashAbs(matA[2] - mat[2]) < 0.0001 &&
+           splashAbs(matA[3] - mat[3]) < 0.0001 &&
+           splashAbs(textMatA[0] - textMat[0]) < 0.0001 &&
+           splashAbs(textMatA[1] - textMat[1]) < 0.0001 &&
+           splashAbs(textMatA[2] - textMat[2]) < 0.0001 &&
+	   splashAbs(textMatA[3] - textMat[3]) < 0.0001;
   }
 
   // Get a glyph - this does a cache lookup first, and if not found,
@@ -67,16 +68,16 @@ public:
   // splashFontFraction = 1 << splashFontFractionBits.  Subclasses
   // should override this to zero out xFrac and/or yFrac if they don't
   // support fractional coordinates.
-  virtual GBool getGlyph(int c, int xFrac, int yFrac,
+  virtual GBool getGlyph(Guint c, int xFrac, int yFrac,
 			 SplashGlyphBitmap *bitmap);
 
   // Rasterize a glyph.  The <xFrac> and <yFrac> values are the same
   // as described for getGlyph.
-  virtual GBool makeGlyph(int c, int xFrac, int yFrac,
+  virtual GBool makeGlyph(Guint c, int xFrac, int yFrac,
 			  SplashGlyphBitmap *bitmap) = 0;
 
   // Return the path for a glyph.
-  virtual SplashPath *getGlyphPath(int c) = 0;
+  virtual SplashPath *getGlyphPath(Guint c) = 0;
 
   // Return the font transform matrix.
   SplashCoord *getMatrix() { return mat; }

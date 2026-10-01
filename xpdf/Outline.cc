@@ -8,11 +8,8 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include "gmem.h"
+#include "gmempp.h"
 #include "GString.h"
 #include "GList.h"
 #include "Error.h"
@@ -83,6 +80,8 @@ OutlineItem::OutlineItem(Object *itemRefA, Dict *dict,
     }
   }
   obj1.free();
+
+  pageNum = -1;
 }
 
 OutlineItem::~OutlineItem() {

@@ -1,8 +1,8 @@
-.\" Copyright 1998-2014 Glyph & Cog, LLC
-.TH pdfimages 1 "28 May 2014"
+.\" Copyright 1998-2025 Glyph & Cog, LLC
+.TH pdfimages 1 "14 Nov 2025"
 .SH NAME
 pdfimages \- Portable Document Format (PDF) image extractor
-(version 3.04)
+(version 4.06)
 .SH SYNOPSIS
 .B pdfimages
 [options]
@@ -10,17 +10,18 @@ pdfimages \- Portable Document Format (PDF) image extractor
 .SH DESCRIPTION
 .B Pdfimages
 saves images from a Portable Document Format (PDF) file as Portable
-Pixmap (PPM), Portable Bitmap (PBM), or JPEG files.
+Pixmap (PPM), Portable Graymap (PGM), Portable Bitmap (PBM), or JPEG
+files.
 .PP
 Pdfimages reads the PDF file, scans one or more pages,
 .IR PDF-file ,
-and writes one PPM, PBM, or JPEG file for each image,
+and writes one PPM, PGM, PBM, or JPEG file for each image,
 .IR image-root - nnnn . xxx ,
 where
 .I nnnn
 is the image number and
 .I xxx
-is the image type (.ppm, .pbm, .jpg).
+is the image type (.ppm, .pgm, .pbm, .jpg).
 .PP
 NB: pdfimages extracts the raw image data from the PDF file, without
 performing any additional transforms.  Any rotation, clipping,
@@ -28,9 +29,8 @@ color inversion, etc. done by the PDF content stream is ignored.
 .SH CONFIGURATION FILE
 Pdfimages reads a configuration file at startup.  It first tries to
 find the user's private config file, ~/.xpdfrc.  If that doesn't
-exist, it looks for a system-wide config file, typically
-/usr/local/etc/xpdfrc (but this location can be changed when pdfimages
-is built).  See the
+exist, it looks for a system-wide config file, typically /etc/xpdfrc
+(but this location can be changed when pdfimages is built).  See the
 .BR xpdfrc (5)
 man page for details.
 .SH OPTIONS
@@ -45,10 +45,39 @@ Specifies the first page to scan.
 Specifies the last page to scan.
 .TP
 .B \-j
-Normally, all images are written as PBM (for monochrome images) or PPM
-(for non-monochrome images) files.  With this option, images in DCT
-format are saved as JPEG files.  All non-DCT images are saved in
-PBM/PPM format as usual.
+Normally, all images are written as PBM (for monochrome images), PGM
+(for grayscale images), or PPM (for color images) files.  With this
+option, images in DCT format are saved as JPEG files.  All non-DCT
+images are saved in PBM/PGM/PPM format as usual.  (Inline images are
+always saved in PBM/PGM/PPM format.)
+.TP
+.B \-J
+Write JPX / JPEG 2000 images as JPEG 2000 files (similar to "-j", but
+for JPEG 2000).
+.TP
+.B \-raw
+Write all images in PDF-native formats.  Most of the formats are not
+standard image formats, so this option is primarily useful as input to
+a tool that generates PDF files.  (Inline images are always saved in
+PBM/PGM/PPM format.)
+.TP
+.B \-u
+Write only one copy of each unique image. If the same image is used
+multiple times, possibly across multiple pages, pdfimages will only
+write one image file. "Uniqueness" is determined by looking for reuse
+of image objects withiin the PDF file; if multiiple copies of an image
+are embedded, pdfimages will treat them as separate, unique images.
+.TP
+.B \-list
+Write a one-line summary to stdout for each image.  The summary
+provides the image file name, the page number, the image width and
+height, the horizontal and vertical resolution (DPI) as drawn, the
+color space type, and the number of bits per component (BPC).
+.TP
+.B \-listonly
+Write a one-line summary to stdout for each image (similar to
+"-list"), but do not generate any image files. If this option is used,
+the "image-root" argument must not be provided.
 .TP
 .BI \-opw " password"
 Specify the owner password for the PDF file.  Providing this will
@@ -57,9 +86,18 @@ bypass all security restrictions.
 .BI \-upw " password"
 Specify the user password for the PDF file.
 .TP
+.B \-verbose
+Print a status message (to stdout) before processing each page.
+.RB "[config file: " printStatusInfo ]
+.TP
 .B \-q
 Don't print any messages or errors.
 .RB "[config file: " errQuiet ]
+.TP
+.BI \-cfg " config-file"
+Read
+.I config-file
+in place of ~/.xpdfrc or the system-wide config file.
 .TP
 .B \-v
 Print copyright and version information.
@@ -85,10 +123,13 @@ Error opening an output file.
 3
 Error related to PDF permissions.
 .TP
+98
+Out of memory.
+.TP
 99
 Other error.
 .SH AUTHOR
-The pdfimages software and documentation are copyright 1998-2014 Glyph
+The pdfimages software and documentation are copyright 1998-2025 Glyph
 & Cog, LLC.
 .SH "SEE ALSO"
 .BR xpdf (1),
@@ -102,4 +143,4 @@ The pdfimages software and documentation are copyright 1998-2014 Glyph
 .BR pdftopng (1),
 .BR xpdfrc (5)
 .br
-.B http://www.foolabs.com/xpdf/
+.B http://www.xpdfreader.com/

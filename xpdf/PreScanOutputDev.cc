@@ -8,11 +8,8 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <math.h>
+#include "gmempp.h"
 #include "GlobalParams.h"
 #include "Page.h"
 #include "Gfx.h"
@@ -42,7 +39,7 @@ void PreScanOutputDev::stroke(GfxState *state) {
   int dashLen;
   double dashStart;
 
-  check(state->getStrokeColorSpace(), state->getStrokeColor(),
+  check(state, state->getStrokeColorSpace(), state->getStrokeColor(),
 	state->getStrokeOpacity(), state->getBlendMode());
   state->getLineDash(&dash, &dashLen, &dashStart);
   if (dashLen != 0) {
@@ -51,59 +48,31 @@ void PreScanOutputDev::stroke(GfxState *state) {
 }
 
 void PreScanOutputDev::fill(GfxState *state) {
-  check(state->getFillColorSpace(), state->getFillColor(),
+  check(state, state->getFillColorSpace(), state->getFillColor(),
 	state->getFillOpacity(), state->getBlendMode());
 }
 
 void PreScanOutputDev::eoFill(GfxState *state) {
-  check(state->getFillColorSpace(), state->getFillColor(),
+  check(state, state->getFillColorSpace(), state->getFillColor(),
 	state->getFillOpacity(), state->getBlendMode());
 }
 
 void PreScanOutputDev::tilingPatternFill(GfxState *state, Gfx *gfx,
 					 Object *strRef,
-					 int paintType, Dict *resDict,
+					 int paintType, int tilingType,
+					 Dict *resDict,
 					 double *mat, double *bbox,
 					 int x0, int y0, int x1, int y1,
 					 double xStep, double yStep) {
   if (paintType == 1) {
     gfx->drawForm(strRef, resDict, mat, bbox);
   } else {
-    check(state->getFillColorSpace(), state->getFillColor(),
+    check(state, state->getFillColorSpace(), state->getFillColor(),
 	  state->getFillOpacity(), state->getBlendMode());
   }
 }
 
-GBool PreScanOutputDev::functionShadedFill(GfxState *state,
-					   GfxFunctionShading *shading) {
-  if (shading->getColorSpace()->getMode() != csDeviceGray &&
-      shading->getColorSpace()->getMode() != csCalGray) {
-    gray = gFalse;
-  }
-  mono = gFalse;
-  if (state->getFillOpacity() != 1 ||
-      state->getBlendMode() != gfxBlendNormal) {
-    transparency = gTrue;
-  }
-  return gTrue;
-}
-
-GBool PreScanOutputDev::axialShadedFill(GfxState *state,
-					GfxAxialShading *shading) {
-  if (shading->getColorSpace()->getMode() != csDeviceGray &&
-      shading->getColorSpace()->getMode() != csCalGray) {
-    gray = gFalse;
-  }
-  mono = gFalse;
-  if (state->getFillOpacity() != 1 ||
-      state->getBlendMode() != gfxBlendNormal) {
-    transparency = gTrue;
-  }
-  return gTrue;
-}
-
-GBool PreScanOutputDev::radialShadedFill(GfxState *state,
-					 GfxRadialShading *shading) {
+GBool PreScanOutputDev::shadedFill(GfxState *state, GfxShading *shading) {
   if (shading->getColorSpace()->getMode() != csDeviceGray &&
       shading->getColorSpace()->getMode() != csCalGray) {
     gray = gFalse;
@@ -133,11 +102,11 @@ void PreScanOutputDev::beginStringOp(GfxState *state) {
 
   render = state->getRender();
   if (!(render & 1)) {
-    check(state->getFillColorSpace(), state->getFillColor(),
+    check(state, state->getFillColorSpace(), state->getFillColor(),
 	  state->getFillOpacity(), state->getBlendMode());
   }
   if ((render & 3) == 1 || (render & 3) == 2) {
-    check(state->getStrokeColorSpace(), state->getStrokeColor(),
+    check(state, state->getStrokeColorSpace(), state->getStrokeColor(),
 	  state->getStrokeOpacity(), state->getBlendMode());
   }
 
@@ -175,7 +144,7 @@ void PreScanOutputDev::endType3Char(GfxState *state) {
 void PreScanOutputDev::drawImageMask(GfxState *state, Object *ref, Stream *str,
 				     int width, int height, GBool invert,
 				     GBool inlineImg, GBool interpolate) {
-  check(state->getFillColorSpace(), state->getFillColor(),
+  check(state, state->getFillColorSpace(), state->getFillColor(),
 	state->getFillOpacity(), state->getBlendMode());
   if (state->getFillColorSpace()->getMode() == csPattern) {
     patternImgMask = gTrue;
@@ -227,7 +196,7 @@ void PreScanOutputDev::drawMaskedImage(GfxState *state, Object *ref,
 				       Stream *str,
 				       int width, int height,
 				       GfxImageColorMap *colorMap,
-				       Stream *maskStr,
+				       Object *maskRef, Stream *maskStr,
 				       int maskWidth, int maskHeight,
 				       GBool maskInvert, GBool interpolate) {
   GfxColorSpace *colorSpace;
@@ -256,10 +225,10 @@ void PreScanOutputDev::drawSoftMaskedImage(GfxState *state, Object *ref,
 					   Stream *str,
 					   int width, int height,
 					   GfxImageColorMap *colorMap,
-					   Stream *maskStr,
+					   Object *maskRef, Stream *maskStr,
 					   int maskWidth, int maskHeight,
 					   GfxImageColorMap *maskColorMap,
-					   GBool interpolate) {
+					   double *matte, GBool interpolate) {
   GfxColorSpace *colorSpace;
 
   colorSpace = colorMap->getColorSpace();
@@ -275,25 +244,43 @@ void PreScanOutputDev::drawSoftMaskedImage(GfxState *state, Object *ref,
   gdi = gFalse;
 }
 
-void PreScanOutputDev::beginTransparencyGroup(
-			   GfxState *state, double *bbox,
-			   GfxColorSpace *blendingColorSpace,
-			   GBool isolated, GBool knockout,
-			   GBool forSoftMask) {
+GBool PreScanOutputDev::beginTransparencyGroup(
+			    GfxState *state, double *bbox,
+			    GfxColorSpace *blendingColorSpace,
+			    GBool isolated, GBool knockout,
+			    GBool forSoftMask) {
   transparency = gTrue;
   gdi = gFalse;
+  return gTrue;
 }
 
-void PreScanOutputDev::check(GfxColorSpace *colorSpace, GfxColor *color,
+void PreScanOutputDev::check(GfxState *state,
+			     GfxColorSpace *colorSpace, GfxColor *color,
 			     double opacity, GfxBlendMode blendMode) {
+  GfxGray gr;
+  GfxCMYK cmyk;
   GfxRGB rgb;
 
   if (colorSpace->getMode() == csPattern) {
     mono = gFalse;
     gray = gFalse;
     gdi = gFalse;
+  } else if (colorSpace->getMode() == csDeviceGray ||
+	     colorSpace->getMode() == csCalGray) {
+    colorSpace->getGray(color, &gr, state->getRenderingIntent());
+    if (!(gr == 0 || gr == gfxColorComp1)) {
+      mono = gFalse;
+    }
+  } else if (colorSpace->getMode() == csDeviceCMYK) {
+    colorSpace->getCMYK(color, &cmyk, state->getRenderingIntent());
+    if (cmyk.c != 0 || cmyk.m != 0 || cmyk.y != 0) {
+      mono = gFalse;
+      gray = gFalse;
+    } else if (!(cmyk.k == 0 || cmyk.k == gfxColorComp1)) {
+      mono = gFalse;
+    }
   } else {
-    colorSpace->getRGB(color, &rgb);
+    colorSpace->getRGB(color, &rgb, state->getRenderingIntent());
     if (rgb.r != rgb.g || rgb.g != rgb.b || rgb.b != rgb.r) {
       mono = gFalse;
       gray = gFalse;

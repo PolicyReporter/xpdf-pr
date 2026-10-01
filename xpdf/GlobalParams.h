@@ -11,11 +11,10 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include <stdio.h>
+#ifdef _WIN32
+#  include <windows.h>
+#endif
 #include "gtypes.h"
 #include "CharTypes.h"
 
@@ -31,6 +30,7 @@ class CharCodeToUnicode;
 class CharCodeToUnicodeCache;
 class UnicodeMap;
 class UnicodeMapCache;
+class UnicodeRemapping;
 class CMap;
 class CMapCache;
 struct XpdfSecurityHandler;
@@ -48,7 +48,8 @@ enum SysFontType {
   sysFontPFA,
   sysFontPFB,
   sysFontTTF,
-  sysFontTTC
+  sysFontTTC,
+  sysFontOTF
 };
 
 //------------------------------------------------------------------------
@@ -73,9 +74,11 @@ enum PSLevel {
   psLevel1,
   psLevel1Sep,
   psLevel2,
+  psLevel2Gray,
   psLevel2Sep,
   psLevel3,
-  psLevel3Sep
+  psLevel3Gray,
+  psLevel3Sep,
 };
 
 //------------------------------------------------------------------------
@@ -84,6 +87,14 @@ enum EndOfLineKind {
   eolUnix,			// LF
   eolDOS,			// CR+LF
   eolMac			// CR
+};
+
+//------------------------------------------------------------------------
+
+enum StrokeAdjustMode {
+  strokeAdjustOff,
+  strokeAdjustNormal,
+  strokeAdjustCAD
 };
 
 //------------------------------------------------------------------------
@@ -116,40 +127,68 @@ public:
   ~KeyBinding();
 };
 
-#define xpdfKeyCodeTab            0x1000
-#define xpdfKeyCodeReturn         0x1001
-#define xpdfKeyCodeEnter          0x1002
-#define xpdfKeyCodeBackspace      0x1003
-#define xpdfKeyCodeInsert         0x1004
-#define xpdfKeyCodeDelete         0x1005
-#define xpdfKeyCodeHome           0x1006
-#define xpdfKeyCodeEnd            0x1007
-#define xpdfKeyCodePgUp           0x1008
-#define xpdfKeyCodePgDn           0x1009
-#define xpdfKeyCodeLeft           0x100a
-#define xpdfKeyCodeRight          0x100b
-#define xpdfKeyCodeUp             0x100c
-#define xpdfKeyCodeDown           0x100d
-#define xpdfKeyCodeF1             0x1100
-#define xpdfKeyCodeF35            0x1122
-#define xpdfKeyCodeMousePress1    0x2001
-#define xpdfKeyCodeMousePress2    0x2002
-#define xpdfKeyCodeMousePress3    0x2003
-#define xpdfKeyCodeMousePress4    0x2004
-#define xpdfKeyCodeMousePress5    0x2005
-#define xpdfKeyCodeMousePress6    0x2006
-#define xpdfKeyCodeMousePress7    0x2007
+#define xpdfKeyCodeTab                0x1000
+#define xpdfKeyCodeReturn             0x1001
+#define xpdfKeyCodeEnter              0x1002
+#define xpdfKeyCodeBackspace          0x1003
+#define xpdfKeyCodeEsc                0x1004
+#define xpdfKeyCodeInsert             0x1005
+#define xpdfKeyCodeDelete             0x1006
+#define xpdfKeyCodeHome               0x1007
+#define xpdfKeyCodeEnd                0x1008
+#define xpdfKeyCodePgUp               0x1009
+#define xpdfKeyCodePgDn               0x100a
+#define xpdfKeyCodeLeft               0x100b
+#define xpdfKeyCodeRight              0x100c
+#define xpdfKeyCodeUp                 0x100d
+#define xpdfKeyCodeDown               0x100e
+#define xpdfKeyCodeF1                 0x1100
+#define xpdfKeyCodeF35                0x1122
+#define xpdfKeyCodeMousePress1        0x2001
+#define xpdfKeyCodeMousePress2        0x2002
+#define xpdfKeyCodeMousePress3        0x2003
+#define xpdfKeyCodeMousePress4        0x2004
+#define xpdfKeyCodeMousePress5        0x2005
+#define xpdfKeyCodeMousePress6        0x2006
+#define xpdfKeyCodeMousePress7        0x2007
 // ...
-#define xpdfKeyCodeMousePress32   0x2020
-#define xpdfKeyCodeMouseRelease1  0x2101
-#define xpdfKeyCodeMouseRelease2  0x2102
-#define xpdfKeyCodeMouseRelease3  0x2103
-#define xpdfKeyCodeMouseRelease4  0x2104
-#define xpdfKeyCodeMouseRelease5  0x2105
-#define xpdfKeyCodeMouseRelease6  0x2106
-#define xpdfKeyCodeMouseRelease7  0x2107
+#define xpdfKeyCodeMousePress32       0x2020
+#define xpdfKeyCodeMouseRelease1      0x2101
+#define xpdfKeyCodeMouseRelease2      0x2102
+#define xpdfKeyCodeMouseRelease3      0x2103
+#define xpdfKeyCodeMouseRelease4      0x2104
+#define xpdfKeyCodeMouseRelease5      0x2105
+#define xpdfKeyCodeMouseRelease6      0x2106
+#define xpdfKeyCodeMouseRelease7      0x2107
 // ...
-#define xpdfKeyCodeMouseRelease32 0x2120
+#define xpdfKeyCodeMouseRelease32     0x2120
+#define xpdfKeyCodeMouseClick1        0x2201
+#define xpdfKeyCodeMouseClick2        0x2202
+#define xpdfKeyCodeMouseClick3        0x2203
+#define xpdfKeyCodeMouseClick4        0x2204
+#define xpdfKeyCodeMouseClick5        0x2205
+#define xpdfKeyCodeMouseClick6        0x2206
+#define xpdfKeyCodeMouseClick7        0x2207
+// ...
+#define xpdfKeyCodeMouseClick32       0x2220
+#define xpdfKeyCodeMouseDoubleClick1  0x2301
+#define xpdfKeyCodeMouseDoubleClick2  0x2302
+#define xpdfKeyCodeMouseDoubleClick3  0x2303
+#define xpdfKeyCodeMouseDoubleClick4  0x2304
+#define xpdfKeyCodeMouseDoubleClick5  0x2305
+#define xpdfKeyCodeMouseDoubleClick6  0x2306
+#define xpdfKeyCodeMouseDoubleClick7  0x2307
+// ...
+#define xpdfKeyCodeMouseDoubleClick32 0x2320
+#define xpdfKeyCodeMouseTripleClick1  0x2401
+#define xpdfKeyCodeMouseTripleClick2  0x2402
+#define xpdfKeyCodeMouseTripleClick3  0x2403
+#define xpdfKeyCodeMouseTripleClick4  0x2404
+#define xpdfKeyCodeMouseTripleClick5  0x2405
+#define xpdfKeyCodeMouseTripleClick6  0x2406
+#define xpdfKeyCodeMouseTripleClick7  0x2407
+// ...
+#define xpdfKeyCodeMouseTripleClick32 0x2420
 #define xpdfKeyModNone            0
 #define xpdfKeyModShift           (1 << 0)
 #define xpdfKeyModCtrl            (1 << 1)
@@ -168,6 +207,27 @@ public:
 
 //------------------------------------------------------------------------
 
+class PopupMenuCmd {
+public:
+
+  GString *label;		// label for display in the menu
+  GList *cmds;			// list of commands [GString]
+
+  PopupMenuCmd(GString *labelA, GList *cmdsA);
+  ~PopupMenuCmd();
+};
+
+//------------------------------------------------------------------------
+
+#ifdef _WIN32
+struct XpdfWin32ErrorInfo {
+  const char *func;		// last Win32 API function call to fail
+  DWORD code;			// error code returned by that function
+};
+#endif
+
+//------------------------------------------------------------------------
+
 class GlobalParams {
 public:
 
@@ -177,8 +237,8 @@ public:
 
   ~GlobalParams();
 
-  void setBaseDir(char *dir);
-  void setupBaseFonts(char *dir);
+  void setBaseDir(const char *dir);
+  void setupBaseFonts(const char *dir);
 
   void parseLine(char *buf, GString *fileName, int line);
 
@@ -192,13 +252,13 @@ public:
   FILE *getUnicodeMapFile(GString *encodingName);
   FILE *findCMapFile(GString *collection, GString *cMapName);
   FILE *findToUnicodeFile(GString *name);
+  UnicodeRemapping *getUnicodeRemapping();
   GString *findFontFile(GString *fontName);
   GString *findBase14FontFile(GString *fontName, int *fontNum,
 			      double *oblique);
   GString *findSystemFontFile(GString *fontName, SysFontType *type,
 			      int *fontNum);
   GString *findCCFontFile(GString *collection);
-  GString *getPSFile();
   int getPSPaperWidth();
   int getPSPaperHeight();
   void getPSImageableArea(int *llx, int *lly, int *urx, int *ury);
@@ -228,18 +288,33 @@ public:
   GBool getPSRasterMono();
   int getPSRasterSliceSize();
   GBool getPSAlwaysRasterize();
+  GBool getPSNeverRasterize();
   GString *getTextEncodingName();
+  GList *getAvailableTextEncodings();
   EndOfLineKind getTextEOL();
   GBool getTextPageBreaks();
   GBool getTextKeepTinyChars();
   GString *getInitialZoom();
-  GBool getContinuousView();
+  int getDefaultFitZoom();
+  double getZoomScaleFactor();
+  GList *getZoomValues();
+  GString *getInitialDisplayMode();
+  GBool getInitialToolbarState();
+  GBool getInitialSidebarState();
+  int getInitialSidebarWidth();
+  GString *getInitialSelectMode();
+  GBool getInitialMaximized();
+  int getMaxTileWidth();
+  int getMaxTileHeight();
+  int getTileCacheSize();
+  int getWorkerThreads();
   GBool getEnableFreeType();
   GBool getDisableFreeTypeHinting();
   GBool getAntialias();
   GBool getVectorAntialias();
+  GBool getImageMaskAntialias();
   GBool getAntialiasPrinting();
-  GBool getStrokeAdjust();
+  StrokeAdjustMode getStrokeAdjust();
   ScreenType getScreenType();
   int getScreenSize();
   int getScreenDotRadius();
@@ -247,18 +322,43 @@ public:
   double getScreenBlackThreshold();
   double getScreenWhiteThreshold();
   double getMinLineWidth();
+  GBool getEnablePathSimplification();
   GBool getDrawAnnotations();
+  GBool getDrawFormFields();
+  GBool getEnableXFA();
+  GBool getPreferXFAFieldValues();
   GBool getOverprintPreview() { return overprintPreview; }
+  GString *getPaperColor();
+  GString *getMatteColor();
+  GString *getFullScreenMatteColor();
+  GString *getSelectionColor();
+  GBool getReverseVideoInvertImages();
+  GBool getAllowLinksToChangeZoom();
   GString *getLaunchCommand() { return launchCommand; }
-  GString *getURLCommand() { return urlCommand; }
   GString *getMovieCommand() { return movieCommand; }
+  GString *getDefaultPrinter();
   GBool getMapNumericCharNames();
   GBool getMapUnknownCharNames();
   GBool getMapExtTrueTypeFontsViaUnicode();
-  GBool getEnableXFA();
+  GBool getUseTrueTypeUnicodeMapping();
+  GBool getIgnoreWrongSizeToUnicode();
+  GBool isDroppedFont(const char *fontName);
+  GBool getSeparateRotatedText();
+  GBool getDiscardCoveredText();
   GList *getKeyBinding(int code, int mods, int context);
+  GList *getAllKeyBindings();
+  int getNumPopupMenuCmds();
+  PopupMenuCmd *getPopupMenuCmd(int idx);
+  GString *getPagesFile();
+  GString *getTabStateFile();
+  GString *getSessionFile();
+  GBool getSaveSessionOnQuit();
+  GBool getSavePageNumbers();
   GBool getPrintCommands();
+  GBool getPrintStatusInfo();
   GBool getErrQuiet();
+  GString *getDebugLogFile();
+  void debugLogPrintf(const char *fmt, ...);
 
   CharCodeToUnicode *getCIDToUnicode(GString *collection);
   CharCodeToUnicode *getUnicodeToUnicode(GString *fontName);
@@ -268,8 +368,8 @@ public:
 
   //----- functions to set parameters
 
+  void addUnicodeRemapping(Unicode in, Unicode *out, int len);
   void addFontFile(GString *fontName, GString *path);
-  void setPSFile(char *file);
   GBool setPSPaperSize(char *size);
   void setPSPaperWidth(int width);
   void setPSPaperHeight(int height);
@@ -281,7 +381,6 @@ public:
   void setPSShrinkLarger(GBool shrink);
   void setPSCenter(GBool center);
   void setPSLevel(PSLevel level);
-  void setPSNoText(GBool notext);
   void setPSEmbedType1(GBool embed);
   void setPSEmbedTrueType(GBool embed);
   void setPSEmbedCIDPostScript(GBool embed);
@@ -295,7 +394,7 @@ public:
   void setTextPageBreaks(GBool pageBreaks);
   void setTextKeepTinyChars(GBool keep);
   void setInitialZoom(char *s);
-  void setContinuousView(GBool cont);
+  void setDefaultFitZoom(int z);
   GBool setEnableFreeType(char *s);
   GBool setAntialias(char *s);
   GBool setVectorAntialias(char *s);
@@ -305,71 +404,86 @@ public:
   void setScreenGamma(double gamma);
   void setScreenBlackThreshold(double thresh);
   void setScreenWhiteThreshold(double thresh);
+  void setDrawFormFields(GBool draw);
+  void setOverprintPreview(GBool preview);
   void setMapNumericCharNames(GBool map);
   void setMapUnknownCharNames(GBool map);
   void setMapExtTrueTypeFontsViaUnicode(GBool map);
-  void setEnableXFA(GBool enable);
+  void setTabStateFile(char *tabStateFileA);
+  void setSessionFile(char *sessionFileA);
   void setPrintCommands(GBool printCommandsA);
+  void setPrintStatusInfo(GBool printStatusInfoA);
   void setErrQuiet(GBool errQuietA);
 
-  //----- security handlers
+#ifdef _WIN32
+  void setWin32ErrorInfo(const char *func, DWORD code);
+  XpdfWin32ErrorInfo *getWin32ErrorInfo();
+#endif
 
-  void addSecurityHandler(XpdfSecurityHandler *handler);
-  XpdfSecurityHandler *getSecurityHandler(char *name);
+  static const char *defaultTextEncoding;
 
 private:
 
+  void setDataDirVar();
   void createDefaultKeyBindings();
+  void initStateFilePaths();
+  FILE *openConfigFile(const char *cfgFileName, GString **fileName);
   void parseFile(GString *fileName, FILE *f);
+  GList *parseLineTokens(char *buf, GString *fileName, int line);
   void parseNameToUnicode(GList *tokens, GString *fileName, int line);
   void parseCIDToUnicode(GList *tokens, GString *fileName, int line);
   void parseUnicodeToUnicode(GList *tokens, GString *fileName, int line);
   void parseUnicodeMap(GList *tokens, GString *fileName, int line);
   void parseCMapDir(GList *tokens, GString *fileName, int line);
   void parseToUnicodeDir(GList *tokens, GString *fileName, int line);
+  void parseUnicodeRemapping(GList *tokens, GString *fileName, int line);
   void parseFontFile(GList *tokens, GString *fileName, int line);
   void parseFontDir(GList *tokens, GString *fileName, int line);
   void parseFontFileCC(GList *tokens, GString *fileName,
 		       int line);
-  void parsePSFile(GList *tokens, GString *fileName, int line);
   void parsePSPaperSize(GList *tokens, GString *fileName, int line);
   void parsePSImageableArea(GList *tokens, GString *fileName, int line);
   void parsePSLevel(GList *tokens, GString *fileName, int line);
   void parsePSResidentFont(GList *tokens, GString *fileName, int line);
   void parsePSResidentFont16(GList *tokens, GString *fileName, int line);
   void parsePSResidentFontCC(GList *tokens, GString *fileName, int line);
-  void parseTextEncoding(GList *tokens, GString *fileName, int line);
   void parseTextEOL(GList *tokens, GString *fileName, int line);
-  void parseInitialZoom(GList *tokens, GString *fileName, int line);
+  void parseStrokeAdjust(GList *tokens, GString *fileName, int line);
   void parseScreenType(GList *tokens, GString *fileName, int line);
+  void parseDropFont(GList *tokens, GString *fileName, int line);
   void parseBind(GList *tokens, GString *fileName, int line);
   void parseUnbind(GList *tokens, GString *fileName, int line);
   GBool parseKey(GString *modKeyStr, GString *contextStr,
 		 int *code, int *mods, int *context,
 		 const char *cmdName,
 		 GList *tokens, GString *fileName, int line);
-  void parseCommand(const char *cmdName, GString **val,
-		    GList *tokens, GString *fileName, int line);
+  void parsePopupMenuCmd(GList *tokens, GString *fileName, int line);
+  void parseZoomScaleFactor(GList *tokens, GString *fileName, int line);
+  void parseZoomValues(GList *tokens, GString *fileName, int line);
   void parseYesNo(const char *cmdName, GBool *flag,
 		  GList *tokens, GString *fileName, int line);
   GBool parseYesNo2(char *token, GBool *flag);
+  void parseString(const char *cmdName, GString **s,
+		   GList *tokens, GString *fileName, int line);
   void parseInteger(const char *cmdName, int *val,
 		    GList *tokens, GString *fileName, int line);
   void parseFloat(const char *cmdName, double *val,
 		  GList *tokens, GString *fileName, int line);
   UnicodeMap *getUnicodeMap2(GString *encodingName);
-#ifdef ENABLE_PLUGINS
-  GBool loadPlugin(char *type, char *name);
-#endif
 
   //----- static tables
 
   NameToCharCode *		// mapping from char name to
     macRomanReverseMap;		//   MacRomanEncoding index
 
-  //----- user-modifiable settings
+  //----- meta settings
 
   GString *baseDir;		// base directory - for plugins, etc.
+  GHash *configFileVars;	// variables for use in the config file
+				//   [GString]
+
+  //----- user-modifiable settings
+
   NameToCharCode *		// mapping from char name to Unicode
     nameToUnicode;
   GHash *cidToUnicodes;		// files for mappings from char collections
@@ -384,6 +498,8 @@ private:
   GHash *cMapDirs;		// list of CMap dirs, indexed by collection
 				//   name [GList[GString]]
   GList *toUnicodeDirs;		// list of ToUnicode CMap dirs [GString]
+  UnicodeRemapping *		// Unicode remapping for text output
+    unicodeRemapping;
   GHash *fontFiles;		// font files: font name mapped to path
 				//   [GString]
   GList *fontDirs;		// list of font dirs [GString]
@@ -392,7 +508,6 @@ private:
   GHash *base14SysFonts;	// Base-14 system font files: font name
 				//   mapped to path [Base14FontInfo]
   SysFontList *sysFonts;	// system fonts
-  GString *psFile;		// PostScript file or command (for xpdf)
   int psPaperWidth;		// paper size, in PostScript points, for
   int psPaperHeight;		//   PostScript output
   int psImageableLLX,		// imageable area, in PostScript points,
@@ -405,7 +520,6 @@ private:
   GBool psShrinkLarger;		// shrink larger pages to fit paper
   GBool psCenter;		// center pages on the paper
   GBool psDuplex;		// enable duplexing in PostScript?
-  GBool psNoText;		// don't output text in PostScript
   PSLevel psLevel;		// PostScript level to generate
   GHash *psResidentFonts;	// 8-bit fonts resident in printer:
 				//   PDF font name mapped to PS font name
@@ -435,6 +549,7 @@ private:
   int psRasterSliceSize;	// maximum size (pixels) of PostScript
 				//   rasterization slice
   GBool psAlwaysRasterize;	// force PostScript rasterization
+  GBool psNeverRasterize;	// prevent PostScript rasterization
   GString *textEncoding;	// encoding (unicodeMap) to use for text
 				//   output
   EndOfLineKind textEOL;	// type of EOL marker to use for text
@@ -442,13 +557,30 @@ private:
   GBool textPageBreaks;		// insert end-of-page markers?
   GBool textKeepTinyChars;	// keep all characters in text output
   GString *initialZoom;		// initial zoom level
-  GBool continuousView;		// continuous view mode
+  int defaultFitZoom;		// default zoom factor if initialZoom is
+				//   'page' or 'width'
+  double zoomScaleFactor;	// displayed zoom values are scaled by this
+  GList *zoomValues;		// zoom values for the combo box
+  GString *initialDisplayMode;	// initial display mode (single,
+				//   continuous, etc.)
+  GBool initialToolbarState;	// initial toolbar state - open (true)
+				//   or closed (false)
+  GBool initialSidebarState;	// initial sidebar state - open (true)
+				//   or closed (false)
+  int initialSidebarWidth;	// initial sidebar width
+  GString *initialSelectMode;	// initial selection mode (block or linear)
+  GBool initialMaximized;	// initial window maximized state
+  int maxTileWidth;		// maximum rasterization tile width
+  int maxTileHeight;		// maximum rasterization tile height
+  int tileCacheSize;		// number of rasterization tiles in cache
+  int workerThreads;		// number of rasterization worker threads
   GBool enableFreeType;		// FreeType enable flag
   GBool disableFreeTypeHinting;	// FreeType hinting disable flag
   GBool antialias;		// font anti-aliasing enable flag
   GBool vectorAntialias;	// vector anti-aliasing enable flag
+  GBool imageMaskAntialias;	// image mask anti-aliasing enable flag
   GBool antialiasPrinting;	// allow anti-aliasing when printing
-  GBool strokeAdjust;		// stroke adjustment enable flag
+  StrokeAdjustMode strokeAdjust; // stroke adjustment mode
   ScreenType screenType;	// halftone screen type
   int screenSize;		// screen matrix size
   int screenDotRadius;		// screen dot radius
@@ -456,35 +588,60 @@ private:
   double screenBlackThreshold;	// screen black clamping threshold
   double screenWhiteThreshold;	// screen white clamping threshold
   double minLineWidth;		// minimum line width
+  GBool				// enable path simplification
+    enablePathSimplification;
   GBool drawAnnotations;	// draw annotations or not
+  GBool drawFormFields;		// draw form fields or not
+  GBool enableXFA;		// enable XFA form parsing
+  GBool preferXFAFieldValues;	// prefer XFA field values over AcroForm values
   GBool overprintPreview;	// enable overprint preview
+  GString *paperColor;		// paper (page background) color
+  GString *matteColor;		// matte (background outside of page) color
+  GString *fullScreenMatteColor; // matte color in full-screen mode
+  GString *selectionColor;	// selection color
+  GBool reverseVideoInvertImages; // invert images in reverse video mode
+  GBool allowLinksToChangeZoom;	// allow clicking on a link to change the zoom
   GString *launchCommand;	// command executed for 'launch' links
-  GString *urlCommand;		// command executed for URL links
   GString *movieCommand;	// command executed for movie annotations
+  GString *defaultPrinter;	// default printer (for interactive printing
+				//   from the viewer)
   GBool mapNumericCharNames;	// map numeric char names (from font subsets)?
   GBool mapUnknownCharNames;	// map unknown char names?
   GBool mapExtTrueTypeFontsViaUnicode;  // map char codes to GID via Unicode
 				        //   for external TrueType fonts?
-  GBool enableXFA;		// enable XFA form rendering
+  GBool useTrueTypeUnicodeMapping;	// use the Unicode cmaps in TrueType
+					//   fonts, rather than the PDF
+					//   ToUnicode mapping
+  GBool ignoreWrongSizeToUnicode;  // ignore ToUnicode CMaps if their size
+				   //   (8-bit vs 16-bit) doesn't match the font
+  GHash *droppedFonts;		// dropped fonts [int]
+  GBool separateRotatedText;	// separate text at each rotation
+  GBool discardCoveredText;	// discard text covered by fill or image
   GList *keyBindings;		// key & mouse button bindings [KeyBinding]
+  GList *popupMenuCmds;		// popup menu commands [PopupMenuCmd]
+  GString *pagesFile;		// path for the page number save file
+  GString *tabStateFile;	// path for the tab state save file
+  GString *sessionFile;		// path for the session save file
+  GBool saveSessionOnQuit;	// save session info when xpdf is quit
+  GBool savePageNumbers;	// save page number when file is closed
+				//   and restore page number when opened
   GBool printCommands;		// print the drawing commands
+  GBool printStatusInfo;	// print status info for each page
   GBool errQuiet;		// suppress error messages?
+  GString *debugLogFile;	// path for debug log file
 
   CharCodeToUnicodeCache *cidToUnicodeCache;
   CharCodeToUnicodeCache *unicodeToUnicodeCache;
   UnicodeMapCache *unicodeMapCache;
   CMapCache *cMapCache;
 
-#ifdef ENABLE_PLUGINS
-  GList *plugins;		// list of plugins [Plugin]
-  GList *securityHandlers;	// list of loaded security handlers
-				//   [XpdfSecurityHandler]
-#endif
-
 #if MULTITHREADED
   GMutex mutex;
   GMutex unicodeMapCacheMutex;
   GMutex cMapCacheMutex;
+#endif
+#ifdef _WIN32
+  DWORD tlsWin32ErrorInfo;	// TLS index for error info
 #endif
 };
 

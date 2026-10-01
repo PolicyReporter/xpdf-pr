@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "gtypes.h"
 #include "CharTypes.h"
 
@@ -24,9 +20,7 @@ class GfxState;
 struct GfxColor;
 class GfxColorSpace;
 class GfxImageColorMap;
-class GfxFunctionShading;
-class GfxAxialShading;
-class GfxRadialShading;
+class GfxShading;
 class Stream;
 class Links;
 class Link;
@@ -61,11 +55,6 @@ public:
   // operations.
   virtual GBool useTilingPatternFill() { return gFalse; }
 
-  // Does this device use functionShadedFill(), axialShadedFill(), and
-  // radialShadedFill()?  If this returns false, these shaded fills
-  // will be reduced to a series of other drawing operations.
-  virtual GBool useShadedFills() { return gFalse; }
-
   // Does this device use drawForm()?  If this returns false,
   // form-type XObjects will be interpreted (i.e., unrolled).
   virtual GBool useDrawForm() { return gFalse; }
@@ -80,6 +69,7 @@ public:
   // Does this device require incCharCount to be called for text on
   // non-shown layers?
   virtual GBool needCharCount() { return gFalse; }
+
 
 
   //----- initialization and control
@@ -105,8 +95,9 @@ public:
   // End a page.
   virtual void endPage() {}
 
-  // Dump page contents to display.
-  virtual void dump() {}
+  // Start/end a sub-page stream (Form XObject, annotation).
+  virtual void startStream(Ref streamRef, GfxState *state) {}
+  virtual void endStream(Ref streamRef) {}
 
   //----- coordinate conversion
 
@@ -143,7 +134,9 @@ public:
   virtual void updateFillOverprint(GfxState *state) {}
   virtual void updateStrokeOverprint(GfxState *state) {}
   virtual void updateOverprintMode(GfxState *state) {}
+  virtual void updateRenderingIntent(GfxState *state) {}
   virtual void updateTransfer(GfxState *state) {}
+  virtual void updateAlphaIsShape(GfxState *state) {}
 
   //----- update text state
   virtual void updateFont(GfxState *state) {}
@@ -155,24 +148,18 @@ public:
   virtual void updateHorizScaling(GfxState *state) {}
   virtual void updateTextPos(GfxState *state) {}
   virtual void updateTextShift(GfxState *state, double shift) {}
-  virtual void saveTextPos(GfxState *state) {}
-  virtual void restoreTextPos(GfxState *state) {}
 
   //----- path painting
   virtual void stroke(GfxState *state) {}
   virtual void fill(GfxState *state) {}
   virtual void eoFill(GfxState *state) {}
+  virtual void fillStroke(GfxState *state, GBool eo);
   virtual void tilingPatternFill(GfxState *state, Gfx *gfx, Object *strRef,
-				 int paintType, Dict *resDict,
+				 int paintType, int tilingType, Dict *resDict,
 				 double *mat, double *bbox,
 				 int x0, int y0, int x1, int y1,
 				 double xStep, double yStep) {}
-  virtual GBool functionShadedFill(GfxState *state,
-				   GfxFunctionShading *shading)
-    { return gFalse; }
-  virtual GBool axialShadedFill(GfxState *state, GfxAxialShading *shading)
-    { return gFalse; }
-  virtual GBool radialShadedFill(GfxState *state, GfxRadialShading *shading)
+  virtual GBool shadedFill(GfxState *state, GfxShading *shading)
     { return gFalse; }
 
   //----- path clipping
@@ -188,8 +175,17 @@ public:
   virtual void drawChar(GfxState *state, double x, double y,
 			double dx, double dy,
 			double originX, double originY,
-			CharCode code, int nBytes, Unicode *u, int uLen) {}
-  virtual void drawString(GfxState *state, GString *s) {}
+			CharCode code, int nBytes, Unicode *u, int uLen,
+			GBool fill, GBool stroke, GBool makePath) {}
+  virtual void drawString(GfxState *state, GString *s,
+			  GBool fill, GBool stroke, GBool makePath) {}
+  virtual void fillTextPath(GfxState *state) {}
+  virtual void strokeTextPath(GfxState *state) {}
+  virtual void clipToTextPath(GfxState *state) {}
+  virtual void clipToTextStrokePath(GfxState *state) {}
+  virtual void clearTextPath(GfxState *state) {}
+  virtual void addTextPathToSavedClipPath(GfxState *state) {}
+  virtual void clipToSavedClipPath(GfxState *state) {}
   virtual GBool beginType3Char(GfxState *state, double x, double y,
 			       double dx, double dy,
 			       CharCode code, Unicode *u, int uLen);
@@ -213,15 +209,16 @@ public:
   virtual void drawMaskedImage(GfxState *state, Object *ref, Stream *str,
 			       int width, int height,
 			       GfxImageColorMap *colorMap,
-			       Stream *maskStr, int maskWidth, int maskHeight,
+			       Object *maskRef, Stream *maskStr,
+			       int maskWidth, int maskHeight,
 			       GBool maskInvert, GBool interpolate);
   virtual void drawSoftMaskedImage(GfxState *state, Object *ref, Stream *str,
 				   int width, int height,
 				   GfxImageColorMap *colorMap,
-				   Stream *maskStr,
+				   Object *maskRef, Stream *maskStr,
 				   int maskWidth, int maskHeight,
 				   GfxImageColorMap *maskColorMap,
-				   GBool interpolate);
+				   double *matte, GBool interpolate);
 
 #if OPI_SUPPORT
   //----- OPI functions
@@ -241,10 +238,10 @@ public:
   virtual void psXObject(Stream *psStream, Stream *level1Stream) {}
 
   //----- transparency groups and soft masks
-  virtual void beginTransparencyGroup(GfxState *state, double *bbox,
-				      GfxColorSpace *blendingColorSpace,
-				      GBool isolated, GBool knockout,
-				      GBool forSoftMask) {}
+  virtual GBool beginTransparencyGroup(GfxState *state, double *bbox,
+				       GfxColorSpace *blendingColorSpace,
+				       GBool isolated, GBool knockout,
+				       GBool forSoftMask) { return gTrue; }
   virtual void endTransparencyGroup(GfxState *state) {}
   virtual void paintTransparencyGroup(GfxState *state, double *bbox) {}
   virtual void setSoftMask(GfxState *state, double *bbox, GBool alpha,
@@ -254,9 +251,9 @@ public:
   //----- links
   virtual void processLink(Link *link) {}
 
-#if 1 //~tmp: turn off anti-aliasing temporarily
-  virtual void setInShading(GBool sh) {}
-#endif
+  //----- structure tree
+  virtual void beginStructureItem(const char *tag, int mcid, Dict *dict) {}
+  virtual void endStructureItem() {}
 
 private:
 

@@ -11,13 +11,12 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "gtypes.h"
 #include "gfile.h"
 #include "Object.h"
+#if MULTITHREADED
+#include "GMutex.h"
+#endif
 
 class Dict;
 class Stream;
@@ -49,7 +48,8 @@ struct XRefCacheEntry {
 
 #define xrefCacheSize 16
 
-#define objStrCacheSize 4
+#define objStrCacheSize 128
+#define objStrCacheTimeout 1000
 
 class XRef {
 public:
@@ -66,6 +66,9 @@ public:
   // Get the error code (if isOk() returns false).
   int getErrorCode() { return errCode; }
 
+  // Was the xref constructed by the repair code?
+  GBool isRepaired() { return repaired; }
+
   // Set the encryption parameters.
   void setEncryption(int permFlagsA, GBool ownerPasswordOkA,
 		     Guchar *fileKeyA, int keyLengthA, int encVersionA,
@@ -73,6 +76,9 @@ public:
 
   // Is the file encrypted?
   GBool isEncrypted() { return encrypted; }
+  GBool getEncryption(int *permFlagsA, GBool *ownerPasswordOkA,
+		      int *keyLengthA, int *encVersionA,
+		      CryptAlgorithm *encAlgorithmA);
 
   // Check various permissions.
   GBool okToPrint(GBool ignoreOwnerPW = gFalse);
@@ -97,9 +103,16 @@ public:
   // Return the offset of the last xref table.
   GFileOffset getLastXRefPos() { return lastXRefPos; }
 
+  // Return the offset of the 'startxref' at the end of the file.
+  GFileOffset getLastStartxrefPos() { return lastStartxrefPos; }
+
   // Return the catalog object reference.
   int getRootNum() { return rootNum; }
   int getRootGen() { return rootGen; }
+
+  // Get the xref table positions.
+  int getNumXRefTables() { return xrefTablePosLen; }
+  GFileOffset getXRefTablePos(int idx) { return xrefTablePos[idx]; }
 
   // Get end position for a stream in a damaged file.
   // Returns false if unknown or file is not damaged.
@@ -121,13 +134,25 @@ private:
   int rootNum, rootGen;		// catalog dict
   GBool ok;			// true if xref table is valid
   int errCode;			// error code (if <ok> is false)
+  GBool repaired;		// set if the xref table was constructed by
+				//   the repair code
   Object trailerDict;		// trailer dictionary
   GFileOffset lastXRefPos;	// offset of last xref table
+  GFileOffset lastStartxrefPos;	// offset of 'startxref' at end of file
+  GFileOffset *xrefTablePos;	// positions of all xref tables
+  int xrefTablePosLen;		// number of xref table positions
   GFileOffset *streamEnds;	// 'endstream' positions - only used in
 				//   damaged files
   int streamEndsLen;		// number of valid entries in streamEnds
   ObjectStream *		// cached object streams
     objStrs[objStrCacheSize];
+  int objStrCacheLength;	// number of valid entries in objStrs[]
+  Guint				// time of last use for each obj stream
+    objStrLastUse[objStrCacheSize];
+  Guint objStrTime;		// current time for the obj stream cache
+#if MULTITHREADED
+  GMutex objStrsMutex;
+#endif
   GBool encrypted;		// true if file is encrypted
   int permFlags;		// permission bits
   GBool ownerPasswordOk;	// true if owner password is correct
@@ -137,14 +162,27 @@ private:
   CryptAlgorithm encAlgorithm;	// encryption algorithm
   XRefCacheEntry		// cache of recently accessed objects
     cache[xrefCacheSize];
+#if MULTITHREADED
+  GMutex cacheMutex;
+#endif
 
   GFileOffset getStartXref();
-  GBool readXRef(GFileOffset *pos, XRefPosSet *posSet);
+  GBool readXRef(GFileOffset *pos, XRefPosSet *posSet, GBool hybrid);
   GBool readXRefTable(GFileOffset *pos, int offset, XRefPosSet *posSet);
-  GBool readXRefStreamSection(Stream *xrefStr, int *w, int first, int n);
   GBool readXRefStream(Stream *xrefStr, GFileOffset *pos);
+  GBool readXRefStreamSection(Stream *xrefStr, int *w, int first, int n);
   GBool constructXRef();
-  ObjectStream *getObjectStream(int objStrNum);
+  void constructTrailerDict(GFileOffset pos);
+  void saveTrailerDict(Dict *dict, GBool isXRefStream);
+  char *constructObjectEntry(char *p, GFileOffset pos, int *objNum);
+  void constructObjectStreamEntries(Object *objStr, int objStrObjNum);
+  GBool constructXRefEntry(int num, int gen, GFileOffset pos,
+			   XRefEntryType type);
+  GBool getObjectStreamObject(int objStrNum, int objIdx,
+			      int objNum, Object *obj, int recursion);
+  ObjectStream *getObjectStreamFromCache(int objStrNum);
+  void addObjectStreamToCache(ObjectStream *objStr);
+  void cleanObjectStreamCache();
   GFileOffset strToFileOffset(char *s);
 };
 

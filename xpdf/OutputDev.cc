@@ -8,11 +8,8 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stddef.h>
+#include "gmempp.h"
 #include "Object.h"
 #include "Stream.h"
 #include "GfxState.h"
@@ -75,6 +72,15 @@ void OutputDev::updateAll(GfxState *state) {
   updateFont(state);
 }
 
+void OutputDev::fillStroke(GfxState *state, GBool eo) {
+  if (eo) {
+    eoFill(state);
+  } else {
+    fill(state);
+  }
+  stroke(state);
+}
+
 GBool OutputDev::beginType3Char(GfxState *state, double x, double y,
 				double dx, double dy,
 				CharCode code, Unicode *u, int uLen) {
@@ -112,7 +118,7 @@ void OutputDev::drawImage(GfxState *state, Object *ref, Stream *str,
 void OutputDev::drawMaskedImage(GfxState *state, Object *ref, Stream *str,
 				int width, int height,
 				GfxImageColorMap *colorMap,
-				Stream *maskStr,
+				Object *maskRef, Stream *maskStr,
 				int maskWidth, int maskHeight,
 				GBool maskInvert, GBool interpolate) {
   drawImage(state, ref, str, width, height, colorMap, NULL, gFalse,
@@ -122,10 +128,10 @@ void OutputDev::drawMaskedImage(GfxState *state, Object *ref, Stream *str,
 void OutputDev::drawSoftMaskedImage(GfxState *state, Object *ref, Stream *str,
 				    int width, int height,
 				    GfxImageColorMap *colorMap,
-				    Stream *maskStr,
+				    Object *maskRef, Stream *maskStr,
 				    int maskWidth, int maskHeight,
 				    GfxImageColorMap *maskColorMap,
-				    GBool interpolate) {
+				    double *matte, GBool interpolate) {
   drawImage(state, ref, str, width, height, colorMap, NULL, gFalse,
 	    interpolate);
 }

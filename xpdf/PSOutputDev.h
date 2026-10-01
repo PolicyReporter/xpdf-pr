@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include <stddef.h>
 #include "config.h"
 #include "Object.h"
@@ -28,7 +24,19 @@ class Function;
 class GfxPath;
 class GfxFont;
 class GfxColorSpace;
+class GfxDeviceGrayColorSpace;
+class GfxCalGrayColorSpace;
+class GfxDeviceRGBColorSpace;
+class GfxCalRGBColorSpace;
+class GfxDeviceCMYKColorSpace;
+class GfxLabColorSpace;
+class GfxICCBasedColorSpace;
+class GfxIndexedColorSpace;
 class GfxSeparationColorSpace;
+class GfxDeviceNColorSpace;
+class GfxFunctionShading;
+class GfxAxialShading;
+class GfxRadialShading;
 class PDFRectangle;
 class PSOutCustomColor;
 class PSOutputDev;
@@ -67,22 +75,25 @@ public:
 
   // Open a PostScript output file, and write the prolog.
   PSOutputDev(char *fileName, PDFDoc *docA,
-	      int firstPage, int lastPage, PSOutMode modeA,
+	      int firstPageA, int lastPageA, PSOutMode modeA,
 	      int imgLLXA = 0, int imgLLYA = 0,
 	      int imgURXA = 0, int imgURYA = 0,
 	      GBool manualCtrlA = gFalse,
 	      PSOutCustomCodeCbk customCodeCbkA = NULL,
-	      void *customCodeCbkDataA = NULL);
+	      void *customCodeCbkDataA = NULL,
+	      GBool honorUserUnitA = gFalse,
+	      GBool fileNameIsUTF8 = gFalse);
 
   // Open a PSOutputDev that will write to a generic stream.
   PSOutputDev(PSOutputFunc outputFuncA, void *outputStreamA,
 	      PDFDoc *docA,
-	      int firstPage, int lastPage, PSOutMode modeA,
+	      int firstPageA, int lastPageA, PSOutMode modeA,
 	      int imgLLXA = 0, int imgLLYA = 0,
 	      int imgURXA = 0, int imgURYA = 0,
 	      GBool manualCtrlA = gFalse,
 	      PSOutCustomCodeCbk customCodeCbkA = NULL,
-	      void *customCodeCbkDataA = NULL);
+	      void *customCodeCbkDataA = NULL,
+	      GBool honorUserUnitA = gFalse);
 
   // Destructor -- writes the trailer and closes the file.
   virtual ~PSOutputDev();
@@ -107,12 +118,6 @@ public:
   // operations.
   virtual GBool useTilingPatternFill() { return gTrue; }
 
-  // Does this device use functionShadedFill(), axialShadedFill(), and
-  // radialShadedFill()?  If this returns false, these shaded fills
-  // will be reduced to a series of other drawing operations.
-  virtual GBool useShadedFills()
-    { return level >= psLevel2; }
-
   // Does this device use drawForm()?  If this returns false,
   // form-type XObjects will be interpreted (i.e., unrolled).
   virtual GBool useDrawForm() { return preload; }
@@ -124,15 +129,14 @@ public:
   //----- header/trailer (used only if manualCtrl is true)
 
   // Write the document-level header.
-  void writeHeader(int firstPage, int lastPage,
-		   PDFRectangle *mediaBox, PDFRectangle *cropBox,
+  void writeHeader(PDFRectangle *mediaBox, PDFRectangle *cropBox,
 		   int pageRotate);
 
   // Write the Xpdf procset.
   void writeXpdfProcset();
 
   // Write the document-level setup.
-  void writeDocSetup(Catalog *catalog, int firstPage, int lastPage);
+  void writeDocSetup(Catalog *catalog);
 
   // Write the trailer for the current page.
   void writePageTrailer();
@@ -178,6 +182,7 @@ public:
   virtual void updateStrokeColor(GfxState *state);
   virtual void updateFillOverprint(GfxState *state);
   virtual void updateStrokeOverprint(GfxState *state);
+  virtual void updateOverprintMode(GfxState *state);
   virtual void updateTransfer(GfxState *state);
 
   //----- update text state
@@ -190,22 +195,17 @@ public:
   virtual void updateHorizScaling(GfxState *state);
   virtual void updateTextPos(GfxState *state);
   virtual void updateTextShift(GfxState *state, double shift);
-  virtual void saveTextPos(GfxState *state);
-  virtual void restoreTextPos(GfxState *state);
 
   //----- path painting
   virtual void stroke(GfxState *state);
   virtual void fill(GfxState *state);
   virtual void eoFill(GfxState *state);
   virtual void tilingPatternFill(GfxState *state, Gfx *gfx, Object *strRef,
-				 int paintType, Dict *resDict,
+				 int paintType, int tilingType, Dict *resDict,
 				 double *mat, double *bbox,
 				 int x0, int y0, int x1, int y1,
 				 double xStep, double yStep);
-  virtual GBool functionShadedFill(GfxState *state,
-				   GfxFunctionShading *shading);
-  virtual GBool axialShadedFill(GfxState *state, GfxAxialShading *shading);
-  virtual GBool radialShadedFill(GfxState *state, GfxRadialShading *shading);
+  virtual GBool shadedFill(GfxState *state, GfxShading *shading);
 
   //----- path clipping
   virtual void clip(GfxState *state);
@@ -213,7 +213,15 @@ public:
   virtual void clipToStrokePath(GfxState *state);
 
   //----- text drawing
-  virtual void drawString(GfxState *state, GString *s);
+  virtual void drawString(GfxState *state, GString *s,
+			  GBool fill, GBool stroke, GBool makePath);
+  virtual void fillTextPath(GfxState *state);
+  virtual void strokeTextPath(GfxState *state);
+  virtual void clipToTextPath(GfxState *state);
+  virtual void clipToTextStrokePath(GfxState *state);
+  virtual void clearTextPath(GfxState *state);
+  virtual void addTextPathToSavedClipPath(GfxState *state);
+  virtual void clipToSavedClipPath(GfxState *state);
   virtual void endTextObject(GfxState *state);
 
   //----- image drawing
@@ -226,7 +234,8 @@ public:
   virtual void drawMaskedImage(GfxState *state, Object *ref, Stream *str,
 			       int width, int height,
 			       GfxImageColorMap *colorMap,
-			       Stream *maskStr, int maskWidth, int maskHeight,
+			       Object *maskRef, Stream *maskStr,
+			       int maskWidth, int maskHeight,
 			       GBool maskInvert, GBool interpolate);
 
 #if OPI_SUPPORT
@@ -247,6 +256,8 @@ public:
   virtual void psXObject(Stream *psStream, Stream *level1Stream);
 
   //----- miscellaneous
+  void setImageableArea(int imgLLXA, int imgLLYA, int imgURXA, int imgURYA)
+    { imgLLX = imgLLXA; imgLLY = imgLLYA; imgURX = imgURXA; imgURY = imgURYA; }
   void setOffset(double x, double y)
     { tx0 = x; ty0 = y; }
   void setScale(double x, double y)
@@ -255,6 +266,8 @@ public:
     { rotate0 = rotateA; }
   void setClip(double llx, double lly, double urx, double ury)
     { clipLLX0 = llx; clipLLY0 = lly; clipURX0 = urx; clipURY0 = ury; }
+  void setExpandSmallPages(GBool expand)
+    { expandSmallPages = expand; }
   void setUnderlayCbk(void (*cbk)(PSOutputDev *psOut, void *data),
 		      void *data)
     { underlayCbk = cbk; underlayCbkData = data; }
@@ -273,9 +286,10 @@ private:
 
   void init(PSOutputFunc outputFuncA, void *outputStreamA,
 	    PSFileType fileTypeA, PDFDoc *docA,
-	    int firstPage, int lastPage, PSOutMode modeA,
+	    int firstPageA, int lastPageA, PSOutMode modeA,
 	    int imgLLXA, int imgLLYA, int imgURXA, int imgURYA,
-	    GBool manualCtrlA);
+	    GBool manualCtrlA, GBool honorUserUnitA);
+  GBool checkIfPageNeedsToBeRasterized(int pg);
   void setupResources(Dict *resDict);
   void setupFonts(Dict *resDict);
   void setupFont(GfxFont *font, Dict *parentResDict);
@@ -283,6 +297,8 @@ private:
   PSFontFileInfo *setupExternalType1Font(GfxFont *font, GString *fileName);
   PSFontFileInfo *setupEmbeddedType1CFont(GfxFont *font, Ref *id);
   PSFontFileInfo *setupEmbeddedOpenTypeT1CFont(GfxFont *font, Ref *id);
+  PSFontFileInfo *setupExternalOpenTypeT1CFont(GfxFont *font,
+					       GString *fileName);
   PSFontFileInfo *setupEmbeddedTrueTypeFont(GfxFont *font, Ref *id);
   PSFontFileInfo *setupExternalTrueTypeFont(GfxFont *font, GString *fileName,
 					    int fontNum);
@@ -294,34 +310,109 @@ private:
 					       int fontNum,
 					       GBool needVerticalMetrics);
   PSFontFileInfo *setupEmbeddedOpenTypeCFFFont(GfxFont *font, Ref *id);
+  PSFontFileInfo *setupExternalOpenTypeCFFFont(GfxFont *font,
+					       GString *fileName);
   PSFontFileInfo *setupType3Font(GfxFont *font, Dict *parentResDict);
   GString *makePSFontName(GfxFont *font, Ref *id);
+  GString *fixType1Font(GString *font, int length1, int length2);
+  GBool splitType1PFA(Guchar *font, int fontSize,
+		      int length1, int length2,
+		      GString *textSection, GString *binSection);
+  GBool splitType1PFB(Guchar *font, int fontSize,
+		      GString *textSection, GString *binSection);
+  GString *asciiHexDecodeType1EexecSection(GString *in);
+  GBool fixType1EexecSection(GString *binSection, GString *out);
+  GString *copyType1PFA(Guchar *font, int fontSize);
+  GString *copyType1PFB(Guchar *font, int fontSize);
+  void renameType1Font(GString *font, GString *name);
+  void setupDefaultFont();
   void setupImages(Dict *resDict);
-  void setupImage(Ref id, Stream *str, GBool mask);
+  void setupImage(Ref id, Stream *str, GBool mask, Array *colorKeyMask);
   void setupForms(Dict *resDict);
   void setupForm(Object *strRef, Object *strObj);
   void addProcessColor(double c, double m, double y, double k);
-  void addCustomColor(GfxSeparationColorSpace *sepCS);
+  void addCustomColor(GfxState *state, GfxSeparationColorSpace *sepCS);
+  void addCustomColors(GfxState *state, GfxDeviceNColorSpace *devnCS);
+  void tilingPatternFillL1(GfxState *state, Gfx *gfx, Object *strRef,
+			   int paintType, int tilingType, Dict *resDict,
+			   double *mat, double *bbox,
+			   int x0, int y0, int x1, int y1,
+			   double xStep, double yStep);
+  void tilingPatternFillL2(GfxState *state, Gfx *gfx, Object *strRef,
+			   int paintType, int tilingType, Dict *resDict,
+			   double *mat, double *bbox,
+			   int x0, int y0, int x1, int y1,
+			   double xStep, double yStep);
+  GBool functionShadedFill(GfxState *state,
+  			   GfxFunctionShading *shading);
+  GBool axialShadedFill(GfxState *state, GfxAxialShading *shading);
+  GBool radialShadedFill(GfxState *state, GfxRadialShading *shading);
   void doPath(GfxPath *path);
-  void doImageL1(Object *ref, GfxImageColorMap *colorMap,
+  void doImageL1(Object *ref, GfxState *state,
+		 GfxImageColorMap *colorMap,
 		 GBool invert, GBool inlineImg,
 		 Stream *str, int width, int height, int len);
-  void doImageL1Sep(GfxImageColorMap *colorMap,
+  void doImageL1Sep(GfxState *state, GfxImageColorMap *colorMap,
 		    GBool invert, GBool inlineImg,
 		    Stream *str, int width, int height, int len);
-  void doImageL2(Object *ref, GfxImageColorMap *colorMap,
+  void doImageL2(Object *ref, GfxState *state,
+		 GfxImageColorMap *colorMap,
 		 GBool invert, GBool inlineImg,
 		 Stream *str, int width, int height, int len,
 		 int *maskColors, Stream *maskStr,
 		 int maskWidth, int maskHeight, GBool maskInvert);
-  void doImageL3(Object *ref, GfxImageColorMap *colorMap,
+  void convertColorKeyMaskToClipRects(GfxImageColorMap *colorMap,
+				      Stream *str,
+				      int width, int height,
+				      int *maskColors);
+  void convertExplicitMaskToClipRects(Stream *maskStr,
+				      int maskWidth, int maskHeight,
+				      GBool maskInvert);
+  void doImageL3(Object *ref, GfxState *state,
+		 GfxImageColorMap *colorMap,
 		 GBool invert, GBool inlineImg,
 		 Stream *str, int width, int height, int len,
 		 int *maskColors, Stream *maskStr,
 		 int maskWidth, int maskHeight, GBool maskInvert);
-  void dumpColorSpaceL2(GfxColorSpace *colorSpace,
+  void dumpColorSpaceL2(GfxState *state, GfxColorSpace *colorSpace,
 			GBool genXform, GBool updateColors,
 			GBool map01);
+  void dumpDeviceGrayColorSpace(GfxDeviceGrayColorSpace *cs,
+				GBool genXform, GBool updateColors,
+				GBool map01);
+  void dumpCalGrayColorSpace(GfxCalGrayColorSpace *cs,
+			     GBool genXform, GBool updateColors,
+			     GBool map01);
+  void dumpDeviceRGBColorSpace(GfxDeviceRGBColorSpace *cs,
+			       GBool genXform, GBool updateColors,
+			       GBool map01);
+  void dumpCalRGBColorSpace(GfxCalRGBColorSpace *cs,
+			    GBool genXform, GBool updateColors,
+			    GBool map01);
+  void dumpDeviceCMYKColorSpace(GfxDeviceCMYKColorSpace *cs,
+				GBool genXform, GBool updateColors,
+				GBool map01);
+  void dumpLabColorSpace(GfxLabColorSpace *cs,
+			 GBool genXform, GBool updateColors,
+			 GBool map01);
+  void dumpICCBasedColorSpace(GfxState *state, GfxICCBasedColorSpace *cs,
+			      GBool genXform, GBool updateColors,
+			      GBool map01);
+  void dumpIndexedColorSpace(GfxState *state,
+			     GfxIndexedColorSpace *cs,
+			     GBool genXform, GBool updateColors,
+			     GBool map01);
+  void dumpSeparationColorSpace(GfxState *state,
+				GfxSeparationColorSpace *cs,
+				GBool genXform, GBool updateColors,
+				GBool map01);
+  void dumpDeviceNColorSpaceL2(GfxState *state, GfxDeviceNColorSpace *cs,
+			       GBool genXform, GBool updateColors,
+			       GBool map01);
+  void dumpDeviceNColorSpaceL3(GfxState *state, GfxDeviceNColorSpace *cs,
+			       GBool genXform, GBool updateColors,
+			       GBool map01);
+  GString *createDeviceNTintFunc(GfxDeviceNColorSpace *cs);
 #if OPI_SUPPORT
   void opiBegin20(GfxState *state, Dict *dict);
   void opiBegin13(GfxState *state, Dict *dict);
@@ -333,7 +424,7 @@ private:
   GString *filterPSName(GString *name);
   void writePSTextLine(GString *s);
 
-  PSLevel level;		// PostScript level (1, 2, separation)
+  PSLevel level;		// PostScript level
   PSOutMode mode;		// PostScript mode (PS, EPS, form)
   int paperWidth;		// width of paper, in pts
   int paperHeight;		// height of paper, in pts
@@ -356,9 +447,15 @@ private:
 			    PSOutCustomCodeLocation loc, int n, 
 			    void *data);
   void *customCodeCbkData;
+  GBool honorUserUnit;
 
   PDFDoc *doc;
   XRef *xref;			// the xref table for this PDF file
+
+  int firstPage;		// first output page
+  int lastPage;			// last output page
+  char *rasterizePage;		// boolean for each page - true if page
+				//   needs to be rasterized
 
   GList *fontInfo;		// info for each font [PSFontInfo]
   GHash *fontFileInfo;		// info for each font file [PSFontFileInfo]
@@ -368,9 +465,11 @@ private:
   Ref *formIDs;			// list of IDs for predefined forms
   int formIDLen;		// number of entries in formIDs array
   int formIDSize;		// size of formIDs array
-  GList *xobjStack;		// stack of XObject dicts currently being
-				//   processed
-  int numSaves;			// current number of gsaves
+  char *visitedResources;	// vector of resource objects already visited
+  GBool noStateChanges;		// true if there have been no state changes
+				//   since the last save
+  GList *saveStack;		// "no state changes" flag for each
+				//   pending save
   int numTilingPatterns;	// current number of nested tiling patterns
   int nextFunc;			// next unique number to use for a function
 
@@ -381,6 +480,7 @@ private:
   int rotate0;			// rotation angle (0, 90, 180, 270)
   double clipLLX0, clipLLY0,
          clipURX0, clipURY0;
+  GBool expandSmallPages;	// expand smaller pages to fill paper
   double tx, ty;		// global translation for current page
   double xScale, yScale;	// global scaling for current page
   int rotate;			// rotation angle for current page
@@ -393,8 +493,11 @@ private:
   PSOutCustomColor		// used custom colors
     *customColors;
 
-  GBool haveTextClip;		// set if text has been drawn with a
-				//   clipping render mode
+  GBool haveSavedTextPath;	// set if text has been drawn with the
+				//   'makePath' argument
+  GBool haveSavedClipPath;	// set if the text path has been added
+				//   to the saved clipping path (with
+				//   addTextPathToSavedClipPath)
 
   GBool inType3Char;		// inside a Type 3 CharProc
   GString *t3String;		// Type 3 content string

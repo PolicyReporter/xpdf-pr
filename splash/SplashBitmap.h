@@ -11,12 +11,58 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
+#include <stdio.h>
+#include <limits.h>
+// older compilers won't define SIZE_MAX in stdint.h without this
+#ifndef __STDC_LIMIT_MACROS
+#  define __STDC_LIMIT_MACROS 1
+#endif
+#include <stdint.h>
+#include "SplashTypes.h"
+
+//------------------------------------------------------------------------
+
+// ssize_t isn't well-defined, so define our own
+#if SIZE_MAX == UINT_MAX
+  typedef int SplashBitmapRowSize;
+# define SplashBitmapRowSizeMax INT_MAX
+#else
+  typedef long long SplashBitmapRowSize;
+# define SplashBitmapRowSizeMax LLONG_MAX
 #endif
 
-#include <stdio.h>
-#include "SplashTypes.h"
+//------------------------------------------------------------------------
+// SplashBitmapMemCache
+//------------------------------------------------------------------------
+
+#define splashBitmapMemCacheSize 4
+
+struct SplashBitmapMemCacheEntry {
+  void *data;
+  int height;
+  SplashBitmapRowSize rowSize;
+};
+
+// This holds onto a small number of freed bitmaps so they can be
+// reused, avoiding system overhead for (re)allocating large chunks of
+// memory. It's not thread-safe, so it needs to be owned by a single
+// thread.
+class SplashBitmapMemCache {
+public:
+
+  SplashBitmapMemCache();
+  ~SplashBitmapMemCache();
+
+private:
+
+  void *alloc(int height, SplashBitmapRowSize rowSize);
+  void free(void *data, int height, SplashBitmapRowSize rowSize);
+
+  SplashBitmapMemCacheEntry cache[splashBitmapMemCacheSize];
+
+  friend class SplashBitmap;
+  friend class SplashAlphaBitmap;
+};
 
 //------------------------------------------------------------------------
 // SplashBitmap
@@ -31,14 +77,14 @@ public:
   // upside-down, i.e., with the last row first in memory.
   SplashBitmap(int widthA, int heightA, int rowPad,
 	       SplashColorMode modeA, GBool alphaA,
-	       GBool topDown = gTrue);
+	       GBool topDown, SplashBitmapMemCache *cacheA);
 
   ~SplashBitmap();
 
   int getWidth() { return width; }
   int getHeight() { return height; }
-  int getRowSize() { return rowSize; }
-  int getAlphaRowSize() { return width; }
+  SplashBitmapRowSize getRowSize() { return rowSize; }
+  size_t getAlphaRowSize() { return alphaRowSize; }
   SplashColorMode getMode() { return mode; }
   SplashColorPtr getDataPtr() { return data; }
   Guchar *getAlphaPtr() { return alpha; }
@@ -55,15 +101,49 @@ public:
   // destructor.
   SplashColorPtr takeData();
 
+  void doNotCache();
+
 private:
 
   int width, height;		// size of bitmap
-  int rowSize;			// size of one row of data, in bytes
+  SplashBitmapRowSize rowSize;	// size of one row of data, in bytes
 				//   - negative for bottom-up bitmaps
+  size_t alphaRowSize;		// size of one row of alpha, in bytes
   SplashColorMode mode;		// color mode
   SplashColorPtr data;		// pointer to row zero of the color data
   Guchar *alpha;		// pointer to row zero of the alpha data
 				//   (always top-down)
+
+  SplashBitmapMemCache *cache;
+
+  friend class Splash;
+};
+
+
+//------------------------------------------------------------------------
+// SplashAlphaBitmap
+//------------------------------------------------------------------------
+
+class SplashAlphaBitmap {
+public:
+
+  // Create a new alpha bitmap with <widthA> x <heightA> pixels.
+  SplashAlphaBitmap(int widthA, int heightA, SplashBitmapMemCache *cacheA);
+
+  ~SplashAlphaBitmap();
+
+  int getWidth() { return width; }
+  int getHeight() { return height; }
+  size_t getAlphaRowSize() { return alphaRowSize; }
+  Guchar *getAlphaPtr() { return alpha; }
+
+private:
+
+  int width, height;		// size of bitmap
+  size_t alphaRowSize;		// size of one row, in bytes
+  Guchar *alpha;		// pointer to the alpha data
+
+  SplashBitmapMemCache *cache;
 
   friend class Splash;
 };

@@ -8,10 +8,7 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
+#include "gmempp.h"
 #include "SplashMath.h"
 #include "SplashScreen.h"
 #include "SplashPattern.h"
@@ -40,3 +37,4 @@ SplashSolidColor::~SplashSolidColor() {
 void SplashSolidColor::getColor(int x, int y, SplashColorPtr c) {
   splashColorCopy(c, color);
 }
+

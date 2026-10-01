@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "Object.h"
 
 class Dict;
@@ -22,6 +18,7 @@ class PDFDoc;
 class XRef;
 class OutputDev;
 class Links;
+class LocalParams;
 
 //------------------------------------------------------------------------
 
@@ -46,7 +43,7 @@ public:
   // Construct a new PageAttrs object by merging a dictionary
   // (of type Pages or Page) into another PageAttrs object.  If
   // <attrs> is NULL, uses defaults.
-  PageAttrs(PageAttrs *attrs, Dict *dict);
+  PageAttrs(PageAttrs *attrs, Dict *dict, XRef *xref);
 
   // Construct a new PageAttrs object for an empty page (only used
   // when there is an error in the page tree).
@@ -127,6 +124,7 @@ public:
 
   // Get page parameters.
   int getNum() { return num; }
+  PageAttrs *getAttrs() { return attrs; }
   PDFRectangle *getMediaBox() { return attrs->getMediaBox(); }
   PDFRectangle *getCropBox() { return attrs->getCropBox(); }
   GBool isCropped() { return attrs->isCropped(); }
@@ -162,15 +160,20 @@ public:
   // Get contents.
   Object *getContents(Object *obj) { return contents.fetch(xref, obj); }
 
+  // Get the page's thumbnail image.
+  Object *getThumbnail(Object *obj) { return thumbnail.fetch(xref, obj); }
+
   // Display a page.
-  void display(OutputDev *out, double hDPI, double vDPI,
+  void display(OutputDev *out, LocalParams *localParams,
+	       double hDPI, double vDPI,
 	       int rotate, GBool useMediaBox, GBool crop,
 	       GBool printing,
 	       GBool (*abortCheckCbk)(void *data) = NULL,
 	       void *abortCheckCbkData = NULL);
 
   // Display part of a page.
-  void displaySlice(OutputDev *out, double hDPI, double vDPI,
+  void displaySlice(OutputDev *out, LocalParams *localParams,
+		    double hDPI, double vDPI,
 		    int rotate, GBool useMediaBox, GBool crop,
 		    int sliceX, int sliceY, int sliceW, int sliceH,
 		    GBool printing,
@@ -188,6 +191,7 @@ public:
   void getDefaultCTM(double *ctm, double hDPI, double vDPI,
 		     int rotate, GBool useMediaBox, GBool upsideDown);
 
+
 private:
 
   PDFDoc *doc;
@@ -196,6 +200,7 @@ private:
   PageAttrs *attrs;		// page attributes
   Object annots;		// annotations array
   Object contents;		// page contents
+  Object thumbnail;		// reference to thumbnail image
   GBool ok;			// true if page is valid
 };
 
