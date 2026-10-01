@@ -1182,8 +1182,9 @@ GBool XRef::okToChange(GBool ignoreOwnerPW) {
   return (!ignoreOwnerPW && ownerPasswordOk) || (permFlags & permChange);
 }
 
+// xpdf-pr: always allow text extraction, ignoring the document's copy permission flag.
 GBool XRef::okToCopy(GBool ignoreOwnerPW) {
-  return (!ignoreOwnerPW && ownerPasswordOk) || (permFlags & permCopy);
+  return gTrue;
 }
 
 GBool XRef::okToAddNotes(GBool ignoreOwnerPW) {
