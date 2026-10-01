@@ -13,16 +13,17 @@
 #include <string.h>
 #include <math.h>
 #include <limits.h>
+#include "gmem.h"
+#include "gmempp.h"
 #include "parseargs.h"
 #include "GString.h"
-#include "gmem.h"
 #include "GlobalParams.h"
 #include "Error.h"
 #include "Object.h"
 #include "Dict.h"
 #include "GfxFont.h"
 #include "Annot.h"
-#include "Form.h"
+#include "AcroForm.h"
 #include "PDFDoc.h"
 #include "config.h"
 
@@ -45,6 +46,7 @@ static const char *fontTypeNames[] = {
 static void scanFonts(Object *obj, PDFDoc *doc);
 static void scanFonts(Dict *resDict, PDFDoc *doc);
 static void scanFont(GfxFont *font, PDFDoc *doc);
+static GBool checkObject(Object *in, Object *out);
 
 static int firstPage = 1;
 static int lastPage = 0;
@@ -84,23 +86,27 @@ static ArgDesc argDesc[] = {
   {NULL}
 };
 
+static PDFDoc *doc;
+
 static Ref *fonts;
 static int fontsLen;
 static int fontsSize;
 
-static Ref *seenObjs;
-static int seenObjsLen;
-static int seenObjsSize;
+static char *seenObjs;
+static int numObjects;
 
 int main(int argc, char *argv[]) {
-  PDFDoc *doc;
-  GString *fileName;
+#if USE_EXCEPTIONS
+  try {
+#endif
+
+  char *fileName;
   GString *ownerPW, *userPW;
   GBool ok;
   Page *page;
   Dict *resDict;
   Annots *annots;
-  Form *form;
+  AcroForm *form;
   Object obj1, obj2;
   int pg, i, j;
   int exitCode;
@@ -108,18 +114,26 @@ int main(int argc, char *argv[]) {
   exitCode = 99;
 
   // parse args
+  fixCommandLine(&argc, &argv);
   ok = parseArgs(argDesc, &argc, argv);
-  if (!ok || argc != 2 || printVersion || printHelp) {
-    fprintf(stderr, "pdffonts version %s\n", xpdfVersion);
-    fprintf(stderr, "%s\n", xpdfCopyright);
-    if (!printVersion) {
-      printUsage("pdffonts", "<PDF-file>", argDesc);
-    }
+  if (printVersion) {
+    printf("pdffonts version %s [www.xpdfreader.com]\n", xpdfVersion);
+    printf("%s\n", xpdfCopyright);
     goto err0;
   }
-  fileName = new GString(argv[1]);
+  if (!ok || argc != 2 || printHelp) {
+    fprintf(stderr, "pdffonts version %s [www.xpdfreader.com]\n", xpdfVersion);
+    fprintf(stderr, "%s\n", xpdfCopyright);
+    printUsage("pdffonts", "<PDF-file>", argDesc);
+    goto err0;
+  }
+  fileName = argv[1];
 
   // read config file
+  if (cfgFileName[0] && !pathIsFile(cfgFileName)) {
+    error(errConfig, -1, "Config file '{0:s}' doesn't exist or isn't a file",
+	  cfgFileName);
+  }
   globalParams = new GlobalParams(cfgFileName);
   globalParams->setupBaseFonts(NULL);
 
@@ -156,32 +170,32 @@ int main(int argc, char *argv[]) {
 
   // scan the fonts
   if (showFontLoc || showFontLocPS) {
-    printf("name                                 type              emb sub uni object ID location\n");
-    printf("------------------------------------ ----------------- --- --- --- --------- --------\n");
+    printf("name                                           type              emb sub uni prob object ID location\n");
+    printf("---------------------------------------------- ----------------- --- --- --- ---- --------- --------\n");
   } else {
-    printf("name                                 type              emb sub uni object ID\n");
-    printf("------------------------------------ ----------------- --- --- --- ---------\n");
+    printf("name                                           type              emb sub uni prob object ID\n");
+    printf("---------------------------------------------- ----------------- --- --- --- ---- ---------\n");
   }
   fonts = NULL;
   fontsLen = fontsSize = 0;
-  seenObjs = NULL;
-  seenObjsLen = seenObjsSize = 0;
+  numObjects = doc->getXRef()->getNumObjects();
+  seenObjs = (char *)gmalloc(numObjects);
+  memset(seenObjs, 0, numObjects);
+  annots = doc->getAnnots();
   for (pg = firstPage; pg <= lastPage; ++pg) {
     page = doc->getCatalog()->getPage(pg);
     if ((resDict = page->getResourceDict())) {
       scanFonts(resDict, doc);
     }
-    annots = new Annots(doc, page->getAnnots(&obj1));
-    obj1.free();
-    for (i = 0; i < annots->getNumAnnots(); ++i) {
-      if (annots->getAnnot(i)->getAppearance(&obj1)->isStream()) {
+    int nAnnots = annots->getNumAnnots(pg);
+    for (i = 0; i < nAnnots; ++i) {
+      if (annots->getAnnot(pg, i)->getAppearance(&obj1)->isStream()) {
 	obj1.streamGetDict()->lookupNF("Resources", &obj2);
 	scanFonts(&obj2, doc);
 	obj2.free();
       }
       obj1.free();
     }
-    delete annots;
   }
   if ((form = doc->getCatalog()->getForm())) {
     for (i = 0; i < form->getNumFields(); ++i) {
@@ -214,39 +228,29 @@ int main(int argc, char *argv[]) {
   gMemReport(stderr);
 
   return exitCode;
+
+#if USE_EXCEPTIONS
+  } catch (GMemException e) {
+    fprintf(stderr, "Out of memory\n");
+    return 98;
+  }
+#endif
 }
 
 static void scanFonts(Object *obj, PDFDoc *doc) {
   Object obj2;
-  int i;
 
-  if (obj->isRef()) {
-    for (i = 0; i < seenObjsLen; ++i) {
-      if (obj->getRefNum() == seenObjs[i].num &&
-	  obj->getRefGen() == seenObjs[i].gen) {
-	return;
-      }
-    }
-    if (seenObjsLen == seenObjsSize) {
-      if (seenObjsSize <= INT_MAX - 32) {
-	seenObjsSize += 32;
-      } else {
-	// let greallocn throw an exception
-	seenObjsSize = -1;
-      }
-      seenObjs = (Ref *)greallocn(seenObjs, seenObjsSize, sizeof(Ref));
-    }
-    seenObjs[seenObjsLen++] = obj->getRef();
-  }
-  if (obj->fetch(doc->getXRef(), &obj2)->isDict()) {
+  if (checkObject(obj, &obj2) && obj2.isDict()) {
     scanFonts(obj2.getDict(), doc);
   }
   obj2.free();
 }
 
 static void scanFonts(Dict *resDict, PDFDoc *doc) {
-  Object obj1, obj2, xObjDict, xObj;
-  Object patternDict, pattern, gsDict, gs, smask, smaskGroup, resObj;
+  Object fontDict1, fontDict2, xObjDict1, xObjDict2, xObj1, xObj2;
+  Object patternDict1, patternDict2, pattern1, pattern2;
+  Object gsDict1, gsDict2, gs1, gs2, smask1, smask2, smaskGroup1, smaskGroup2;
+  Object resObj;
   Ref r;
   GfxFontDict *gfxFontDict;
   GfxFont *font;
@@ -254,79 +258,90 @@ static void scanFonts(Dict *resDict, PDFDoc *doc) {
 
   // scan the fonts in this resource dictionary
   gfxFontDict = NULL;
-  resDict->lookupNF("Font", &obj1);
-  if (obj1.isRef()) {
-    obj1.fetch(doc->getXRef(), &obj2);
-    if (obj2.isDict()) {
-      r = obj1.getRef();
-      gfxFontDict = new GfxFontDict(doc->getXRef(), &r, obj2.getDict());
+  resDict->lookupNF("Font", &fontDict1);
+  if (checkObject(&fontDict1, &fontDict2) && fontDict2.isDict()) {
+    if (fontDict1.isRef()) {
+      r = fontDict1.getRef();
+      gfxFontDict = new GfxFontDict(doc->getXRef(), &r, fontDict2.getDict());
+    } else {
+      gfxFontDict = new GfxFontDict(doc->getXRef(), NULL, fontDict2.getDict());
     }
-    obj2.free();
-  } else if (obj1.isDict()) {
-    gfxFontDict = new GfxFontDict(doc->getXRef(), NULL, obj1.getDict());
-  }
-  if (gfxFontDict) {
-    for (i = 0; i < gfxFontDict->getNumFonts(); ++i) {
-      if ((font = gfxFontDict->getFont(i))) {
-	scanFont(font, doc);
+    if (gfxFontDict) {
+      for (i = 0; i < gfxFontDict->getNumFonts(); ++i) {
+	if ((font = gfxFontDict->getFont(i))) {
+	  scanFont(font, doc);
+	}
       }
+      delete gfxFontDict;
     }
-    delete gfxFontDict;
   }
-  obj1.free();
+  fontDict2.free();
+  fontDict1.free();
 
   // recursively scan any resource dictionaries in XObjects in this
   // resource dictionary
-  resDict->lookup("XObject", &xObjDict);
-  if (xObjDict.isDict()) {
-    for (i = 0; i < xObjDict.dictGetLength(); ++i) {
-      xObjDict.dictGetVal(i, &xObj);
-      if (xObj.isStream()) {
-	xObj.streamGetDict()->lookupNF("Resources", &resObj);
+  resDict->lookupNF("XObject", &xObjDict1);
+  if (checkObject(&xObjDict1, &xObjDict2) && xObjDict2.isDict()) {
+    for (i = 0; i < xObjDict2.dictGetLength(); ++i) {
+      xObjDict2.dictGetValNF(i, &xObj1);
+      if (checkObject(&xObj1, &xObj2) && xObj2.isStream()) {
+	xObj2.streamGetDict()->lookupNF("Resources", &resObj);
 	scanFonts(&resObj, doc);
 	resObj.free();
       }
-      xObj.free();
+      xObj2.free();
+      xObj1.free();
     }
   }
-  xObjDict.free();
+  xObjDict2.free();
+  xObjDict1.free();
 
   // recursively scan any resource dictionaries in Patterns in this
   // resource dictionary
-  resDict->lookup("Pattern", &patternDict);
-  if (patternDict.isDict()) {
-    for (i = 0; i < patternDict.dictGetLength(); ++i) {
-      patternDict.dictGetVal(i, &pattern);
-      if (pattern.isStream()) {
-	pattern.streamGetDict()->lookupNF("Resources", &resObj);
+  resDict->lookupNF("Pattern", &patternDict1);
+  if (checkObject(&patternDict1, &patternDict2) && patternDict2.isDict()) {
+    for (i = 0; i < patternDict2.dictGetLength(); ++i) {
+      patternDict2.dictGetValNF(i, &pattern1);
+      if (checkObject(&pattern1, &pattern2) && pattern2.isStream()) {
+	pattern2.streamGetDict()->lookupNF("Resources", &resObj);
 	scanFonts(&resObj, doc);
 	resObj.free();
       }
-      pattern.free();
+      pattern2.free();
+      pattern1.free();
     }
   }
-  patternDict.free();
+  patternDict2.free();
+  patternDict1.free();
 
   // recursively scan any resource dictionaries in ExtGStates in this
   // resource dictionary
-  resDict->lookup("ExtGState", &gsDict);
-  if (gsDict.isDict()) {
-    for (i = 0; i < gsDict.dictGetLength(); ++i) {
-      if (gsDict.dictGetVal(i, &gs)->isDict()) {
-	if (gs.dictLookup("SMask", &smask)->isDict()) {
-	  if (smask.dictLookup("G", &smaskGroup)->isStream()) {
-	    smaskGroup.streamGetDict()->lookupNF("Resources", &resObj);
+  resDict->lookupNF("ExtGState", &gsDict1);
+  if (checkObject(&gsDict1, &gsDict2) && gsDict2.isDict()) {
+    for (i = 0; i < gsDict2.dictGetLength(); ++i) {
+      gsDict2.dictGetValNF(i, &gs1);
+      if (checkObject(&gs1, &gs2) && gs2.isDict()) {
+	gs2.dictLookupNF("SMask", &smask1);
+	if (checkObject(&smask1, &smask2) && smask2.isDict()) {
+	  smask2.dictLookupNF("G", &smaskGroup1);
+	  if (checkObject(&smaskGroup1, &smaskGroup2) &&
+	      smaskGroup2.isStream()) {
+	    smaskGroup2.streamGetDict()->lookupNF("Resources", &resObj);
 	    scanFonts(&resObj, doc);
 	    resObj.free();
 	  }
-	  smaskGroup.free();
+	  smaskGroup2.free();
+	  smaskGroup1.free();
 	}
-	smask.free();
+	smask2.free();
+	smask1.free();
       }
-      gs.free();
+      gs2.free();
+      gs1.free();
     }
   }
-  gsDict.free();
+  gsDict2.free();
+  gsDict1.free();
 }
 
 static void scanFont(GfxFont *font, PDFDoc *doc) {
@@ -377,12 +392,13 @@ static void scanFont(GfxFont *font, PDFDoc *doc) {
   }
 
   // print the font info
-  printf("%-36s %-17s %-3s %-3s %-3s",
+  printf("%-46s %-17s %-3s %-3s %-3s %-4s",
 	 name ? name->getCString() : "[none]",
 	 fontTypeNames[font->getType()],
 	 emb ? "yes" : "no",
 	 subset ? "yes" : "no",
-	 hasToUnicode ? "yes" : "no");
+	 hasToUnicode ? "yes" : "no",
+	 font->problematicForUnicode() ? " X" : "");
   if (fontRef.gen >= 100000) {
     printf(" [none]");
   } else {
@@ -428,4 +444,25 @@ static void scanFont(GfxFont *font, PDFDoc *doc) {
     fonts = (Ref *)greallocn(fonts, fontsSize, sizeof(Ref));
   }
   fonts[fontsLen++] = *font->getID();
+}
+
+static GBool checkObject(Object *in, Object *out) {
+  int objNum;
+
+  if (!in->isRef()) {
+    in->copy(out);
+    return gTrue;
+  }
+  objNum = in->getRefNum();
+  if (objNum < 0 || objNum >= numObjects) {
+    out->initNull();
+    return gTrue;
+  }
+  if (seenObjs[objNum]) {
+    out->initNull();
+    return gFalse;
+  }
+  seenObjs[objNum] = (char)1;
+  in->fetch(doc->getXRef(), out);
+  return gTrue;
 }

@@ -1,10 +1,10 @@
-pdftoppm(1)                                                        pdftoppm(1)
+pdftoppm(1)                 General Commands Manual                pdftoppm(1)
 
 
 
 NAME
        pdftoppm - Portable Document Format (PDF) to Portable Pixmap (PPM) con-
-       verter (version 3.04)
+       verter (version 4.06)
 
 SYNOPSIS
        pdftoppm [options] PDF-file PPM-root
@@ -23,9 +23,9 @@ DESCRIPTION
 CONFIGURATION FILE
        Pdftoppm reads a configuration file at startup.  It first tries to find
        the  user's  private config file, ~/.xpdfrc.  If that doesn't exist, it
-       looks for a system-wide config  file,  typically  /usr/local/etc/xpdfrc
-       (but  this  location  can  be changed when pdftoppm is built).  See the
-       xpdfrc(5) man page for details.
+       looks for a system-wide config file, typically  /etc/xpdfrc  (but  this
+       location can be changed when pdftoppm is built).  See the xpdfrc(5) man
+       page for details.
 
 OPTIONS
        Many of the following options can be set with configuration  file  com-
@@ -41,9 +41,14 @@ OPTIONS
        -r number
               Specifies the resolution, in DPI.  The default is 150 DPI.
 
-       -mono  Generate a monochrome PBM file (instead of a color PPM file).
+       -mono  Generate a monochrome PBM file (instead of an RGB PPM file).
 
-       -gray  Generate a grayscale PGM file (instead of a color PPM file).
+       -gray  Generate a grayscale PGM file (instead of an RGB PPM file).
+
+       -cmyk  Generate a CMYK PAM file (instead of an RGB PPM file).
+
+       -rot angle
+              Rotate pages by 0 (the default), 90, 180, or 270 degrees.
 
        -freetype yes | no
               Enable or disable FreeType (a TrueType /  Type  1  font  raster-
@@ -64,7 +69,15 @@ OPTIONS
        -upw password
               Specify the user password for the PDF file.
 
+       -verbose
+              Print a status message (to stdout) before processing each  page.
+              [config file: printStatusInfo]
+
        -q     Don't print any messages or errors.  [config file: errQuiet]
+
+       -cfg config-file
+              Read config-file in place of ~/.xpdfrc or the system-wide config
+              file.
 
        -v     Print copyright and version information.
 
@@ -81,17 +94,19 @@ EXIT CODES
 
        3      Error related to PDF permissions.
 
+       98     Out of memory.
+
        99     Other error.
 
 AUTHOR
-       The pdftoppm software and documentation are copyright 1996-2014 Glyph &
+       The pdftoppm software and documentation are copyright 1996-2025 Glyph &
        Cog, LLC.
 
 SEE ALSO
        xpdf(1),   pdftops(1),  pdftotext(1),  pdftohtml(1),  pdfinfo(1),  pdf-
        fonts(1), pdfdetach(1), pdftopng(1), pdfimages(1), xpdfrc(5)
-       http://www.foolabs.com/xpdf/
+       http://www.xpdfreader.com/
 
 
 
-                                  28 May 2014                      pdftoppm(1)
+                                  14 Nov 2025                      pdftoppm(1)

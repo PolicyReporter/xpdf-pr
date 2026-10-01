@@ -8,11 +8,9 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stddef.h>
+#include <string.h>
+#include "gmempp.h"
 #include "Object.h"
 #include "Array.h"
 #include "Dict.h"
@@ -20,10 +18,6 @@
 #include "Parser.h"
 #include "XRef.h"
 #include "Error.h"
-
-// Max number of nested objects.  This is used to catch infinite loops
-// in the object structure.
-#define recursionLimit 500
 
 Parser::Parser(XRef *xrefA, Lexer *lexerA, GBool allowStreamsA) {
   xref = xrefA;
@@ -62,7 +56,7 @@ Object *Parser::getObj(Object *obj, GBool simpleOnly,
   }
 
   // array
-  if (!simpleOnly && recursion < recursionLimit && buf1.isCmd("[")) {
+  if (!simpleOnly && recursion < objectRecursionLimit && buf1.isCmd("[")) {
     shift();
     obj->initArray(xref);
     while (!buf1.isCmd("]") && !buf1.isEOF())
@@ -73,7 +67,8 @@ Object *Parser::getObj(Object *obj, GBool simpleOnly,
     shift();
 
   // dictionary or stream
-  } else if (!simpleOnly && recursion < recursionLimit && buf1.isCmd("<<")) {
+  } else if (!simpleOnly && recursion < objectRecursionLimit &&
+	     buf1.isCmd("<<")) {
     shift();
     obj->initDict(xref);
     while (!buf1.isCmd(">>") && !buf1.isEOF()) {
@@ -114,7 +109,14 @@ Object *Parser::getObj(Object *obj, GBool simpleOnly,
     num = buf1.getInt();
     shift();
     if (buf1.isInt() && buf2.isCmd("R")) {
-      obj->initRef(num, buf1.getInt());
+      int gen = buf1.getInt();
+      if (num >= 0 && gen >= 0) {
+	obj->initRef(num, gen);
+      } else {
+	error(errSyntaxError, getPos(),
+	      "Negative number or generation in indirect reference");
+	obj->initError();
+      }
       shift();
       shift();
     } else {
@@ -150,33 +152,35 @@ Object *Parser::getObj(Object *obj, GBool simpleOnly,
 Stream *Parser::makeStream(Object *dict, Guchar *fileKey,
 			   CryptAlgorithm encAlgorithm, int keyLength,
 			   int objNum, int objGen, int recursion) {
-  Object obj;
-  BaseStream *baseStr;
-  Stream *str;
-  GFileOffset pos, endPos, length;
-
   // get stream start position
   lexer->skipToNextLine();
-  if (!(str = lexer->getStream())) {
+  Stream *curStr = lexer->getStream();
+  if (!curStr) {
     return NULL;
   }
-  pos = str->getPos();
+  GFileOffset pos = curStr->getPos();
+
+  GBool haveLength = gFalse;
+  GFileOffset length = 0;
+  GFileOffset endPos;
 
   // check for length in damaged file
   if (xref && xref->getStreamEnd(pos, &endPos)) {
     length = endPos - pos;
+    haveLength = gTrue;
 
   // get length from the stream object
   } else {
+    Object obj;
     dict->dictLookup("Length", &obj, recursion);
     if (obj.isInt()) {
       length = (GFileOffset)(Guint)obj.getInt();
-      obj.free();
+      haveLength = gTrue;
     } else {
-      error(errSyntaxError, getPos(), "Bad 'Length' attribute in stream");
-      obj.free();
-      return NULL;
+      error(errSyntaxError, getPos(),
+	    "Missing or invalid 'Length' attribute in stream");
     }
+    obj.free();
   }
 
   // in badly damaged PDF files, we can run off the end of the input
@@ -184,30 +188,104 @@ Stream *Parser::makeStream(Object *dict, Guchar *fileKey,
   if (!lexer->getStream()) {
     return NULL;
   }
-  baseStr = lexer->getStream()->getBaseStream();
 
-  // skip over stream data
-  lexer->setPos(pos + length);
+  // copy the base stream (Lexer will free stream objects when it gets
+  // to end of stream -- which can happen in the shift() calls below)
+  BaseStream *baseStr =
+      (BaseStream *)lexer->getStream()->getBaseStream()->copy();
 
-  // refill token buffers and check for 'endstream'
-  shift();  // kill '>>'
-  shift();  // kill 'stream'
-  if (buf1.isCmd("endstream")) {
-    shift();
-  } else {
-    error(errSyntaxError, getPos(), "Missing 'endstream'");
-    // kludge for broken PDF files: just add 5k to the length, and
-    // hope its enough
-    length += 5000;
+  // 'Length' attribute is missing -- search for 'endstream'
+  if (!haveLength) {
+    GBool foundEndstream = gFalse;
+    char endstreamBuf[8];
+    if ((curStr = lexer->getStream())) {
+      int c;
+      while ((c = curStr->getChar()) != EOF) {
+	if (c == 'e' &&
+	    curStr->getBlock(endstreamBuf, 8) == 8 &&
+	    !memcmp(endstreamBuf, "ndstream", 8)) {
+	  length = curStr->getPos() - 9 - pos;
+	  foundEndstream = gTrue;
+	  break;
+	}
+      }
+    }
+    if (!foundEndstream) {
+      error(errSyntaxError, getPos(), "Couldn't find 'endstream' for stream");
+      delete baseStr;
+      return NULL;
+    }
   }
 
-  // make base stream
-  str = baseStr->makeSubStream(pos, gTrue, length, dict);
+  // make new base stream
+  Stream *str = baseStr->makeSubStream(pos, gTrue, length, dict);
+
+  // look for the 'endstream' marker
+  if (haveLength) {
+    // skip over stream data
+    lexer->setPos(pos + length);
+
+    // check for 'endstream'
+    // NB: we never reuse the Parser object to parse objects after a
+    // stream, and we could (if the PDF file is damaged) be in the
+    // middle of binary data at this point, so we check the stream
+    // data directly for 'endstream', rather than calling shift() to
+    // parse objects
+    GBool foundEndstream = gFalse;
+    char endstreamBuf[8];
+    if ((curStr = lexer->getStream())) {
+      // skip up to 100 whitespace chars
+      int c;
+      for (int i = 0; i < 100; ++i) {
+	c = curStr->getChar();
+	if (!Lexer::isSpace(c)) {
+	  break;
+	}
+      }
+      if (c == 'e') {
+	if (curStr->getBlock(endstreamBuf, 8) == 8 &&
+	    !memcmp(endstreamBuf, "ndstream", 8)) {
+	  foundEndstream = gTrue;
+	}
+      }
+    }
+    if (!foundEndstream) {
+      error(errSyntaxError, getPos(), "Missing 'endstream'");
+      // kludge for broken PDF files: just add 5k to the length, and
+      // hope it's enough
+      // (dict is now owned by str, so we need to copy it before deleting str)
+      Object obj;
+      dict->copy(&obj);
+      delete str;
+      length += 5000;
+      str = baseStr->makeSubStream(pos, gTrue, length, &obj);
+    }
+  }
+
+  // free the copied base stream
+  delete baseStr;
 
   // handle decryption
   if (fileKey) {
-    str = new DecryptStream(str, fileKey, encAlgorithm, keyLength,
-			    objNum, objGen);
+    // the 'Crypt' filter is used to mark unencrypted metadata streams
+    //~ this should also check for an empty DecodeParams entry
+    GBool encrypted = gTrue;
+    Object obj;
+    dict->dictLookup("Filter", &obj, recursion);
+    if (obj.isName("Crypt")) {
+      encrypted = gFalse;
+    } else if (obj.isArray() && obj.arrayGetLength() >= 1) {
+      Object obj2;
+      if (obj.arrayGet(0, &obj2)->isName("Crypt")) {
+	encrypted = gFalse;
+      }
+      obj2.free();
+    }
+    obj.free();
+    if (encrypted) {
+      str = new DecryptStream(str, fileKey, encAlgorithm, keyLength,
+			      objNum, objGen);
+    }
   }
 
   // get filters

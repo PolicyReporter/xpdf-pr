@@ -8,18 +8,15 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdio.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include "gmempp.h"
 #include "GString.h"
 #include "GlobalParams.h"
 #include "Error.h"
 
-static const char *errorCategoryNames[] = {
+const char *errorCategoryNames[] = {
   "Syntax Warning",
   "Syntax Error",
   "Config Error",
@@ -41,23 +38,8 @@ void setErrorCallback(void (*cbk)(void *data, ErrorCategory category,
   errorCbkData = data;
 }
 
-void CDECL error(int pos, char *msg, ...) {
-  va_list args;
-
-  // NB: this can be called before the globalParams object is created
-  if (globalParams && globalParams->getErrQuiet()) {
-    return;
-  }
-  if (pos >= 0) {
-    fprintf(stderr, "Error (%d): ", pos);
-  } else {
-    fprintf(stderr, "Error: ");
-  }
-  va_start(args, msg);
-  vfprintf(stderr, msg, args);
-  va_end(args);
-  fprintf(stderr, "\n");
-  fflush(stderr);
+void *getErrorCallbackData() {
+  return errorCbkData;
 }
 
 void CDECL error(ErrorCategory category, GFileOffset pos,
@@ -90,6 +72,7 @@ void CDECL error(ErrorCategory category, GFileOffset pos,
   if (errorCbk) {
     (*errorCbk)(errorCbkData, category, (int)pos, sanitized->getCString());
   } else {
+    fflush(stdout);
     if (pos >= 0) {
       fprintf(stderr, "%s (%d): %s\n",
 	      errorCategoryNames[category], (int)pos, sanitized->getCString());

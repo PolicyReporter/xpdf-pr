@@ -8,13 +8,10 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stddef.h>
 #include <string.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "GString.h"
 #include "Error.h"
 #include "Object.h"

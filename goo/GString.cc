@@ -10,10 +10,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
@@ -21,6 +17,7 @@
 #include <math.h>
 #include <limits.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "GString.h"
 
 //------------------------------------------------------------------------
@@ -415,6 +412,8 @@ GString *GString::appendfv(const char *fmt, va_list argList) {
 
 	// format the argument
 	arg = args[idx];
+	str = NULL;
+	len = 0;
 	switch (ft) {
 	case fmtIntDecimal:
 	  formatInt(arg.i, buf, sizeof(buf), zeroFill, width, 10, &str, &len);
@@ -655,7 +654,7 @@ void GString::formatDouble(double x, char *buf, int bufSize, int prec,
     x2 = floor(0.1 * (x + 0.5));
     d = (int)floor(x - 10 * x2 + 0.5);
     if (started || d != 0) {
-      buf[--i] = '0' + d;
+      buf[--i] = (char)('0' + d);
       started = gTrue;
     }
     x = x2;
@@ -667,7 +666,7 @@ void GString::formatDouble(double x, char *buf, int bufSize, int prec,
     do {
       x2 = floor(0.1 * (x + 0.5));
       d = (int)floor(x - 10 * x2 + 0.5);
-      buf[--i] = '0' + d;
+      buf[--i] = (char)('0' + d);
       x = x2;
     } while (i > 1 && x);
   }
@@ -755,8 +754,9 @@ GString *GString::upperCase() {
   int i;
 
   for (i = 0; i < length; ++i) {
-    if (islower(s[i]))
-      s[i] = toupper(s[i]);
+    if (islower(s[i] & 0xff)) {
+      s[i] = (char)toupper(s[i] & 0xff);
+    }
   }
   return this;
 }
@@ -765,8 +765,9 @@ GString *GString::lowerCase() {
   int i;
 
   for (i = 0; i < length; ++i) {
-    if (isupper(s[i]))
-      s[i] = tolower(s[i]);
+    if (isupper(s[i] & 0xff)) {
+      s[i] = (char)tolower(s[i] & 0xff);
+    }
   }
   return this;
 }
@@ -778,7 +779,7 @@ int GString::cmp(GString *str) {
   n1 = length;
   n2 = str->length;
   for (i = 0, p1 = s, p2 = str->s; i < n1 && i < n2; ++i, ++p1, ++p2) {
-    x = *p1 - *p2;
+    x = (*p1 & 0xff) - (*p2 & 0xff);
     if (x != 0) {
       return x;
     }
@@ -795,7 +796,7 @@ int GString::cmpN(GString *str, int n) {
   for (i = 0, p1 = s, p2 = str->s;
        i < n1 && i < n2 && i < n;
        ++i, ++p1, ++p2) {
-    x = *p1 - *p2;
+    x = (*p1 & 0xff) - (*p2 & 0xff);
     if (x != 0) {
       return x;
     }
@@ -812,7 +813,7 @@ int GString::cmp(const char *sA) {
 
   n1 = length;
   for (i = 0, p1 = s, p2 = sA; i < n1 && *p2; ++i, ++p1, ++p2) {
-    x = *p1 - *p2;
+    x = (*p1 & 0xff) - (*p2 & 0xff);
     if (x != 0) {
       return x;
     }
@@ -832,7 +833,7 @@ int GString::cmpN(const char *sA, int n) {
 
   n1 = length;
   for (i = 0, p1 = s, p2 = sA; i < n1 && *p2 && i < n; ++i, ++p1, ++p2) {
-    x = *p1 - *p2;
+    x = (*p1 & 0xff) - (*p2 & 0xff);
     if (x != 0) {
       return x;
     }
@@ -847,30 +848,4 @@ int GString::cmpN(const char *sA, int n) {
     return -1;
   }
   return 0;
-}
-
-GString *GString::htmlEscape() {
-  GString *tmp = new GString();
-  
-  for (int i = 0; i < length; ++i) {
-    switch (s[i]) { 
-      case '"': tmp->append("&quot;"); break;
-      case '&': tmp->append("&amp;");  break;
-      case '<': tmp->append("&lt;");  break;
-      case '>': tmp->append("&gt;");  break;
-      default: tmp->append(s[i]);
-    }
-  }
-
-  return tmp;
-}
-
-GString *GString::replaceChar(char oldChar, char newChar) {
-    int i;
-    for (i = 0; i < length; ++i) {
-        if (s[i] == oldChar) {
-            s[i] = newChar;
-        }
-    }
-    return this;
 }

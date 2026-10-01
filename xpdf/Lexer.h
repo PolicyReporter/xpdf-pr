@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "Object.h"
 #include "Stream.h"
 
@@ -46,8 +42,14 @@ public:
   // Skip to the beginning of the next line in the input stream.
   void skipToNextLine();
 
+  // Skip to the end of the input stream.
+  void skipToEOF();
+
   // Skip over one character.
   void skipChar() { getChar(); }
+
+  // Get stream index (for arrays of streams).
+  int getStreamIndex() { return strPtr; }
 
   // Get stream.
   Stream *getStream()

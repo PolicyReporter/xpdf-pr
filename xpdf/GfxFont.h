@@ -11,21 +11,22 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "gtypes.h"
 #include "GString.h"
 #include "Object.h"
 #include "CharTypes.h"
 
+class GList;
+class GHash;
 class Dict;
 class CMap;
 class CharCodeToUnicode;
 class FoFiTrueType;
+class FoFiType1C;
 struct GfxFontCIDWidths;
 struct Base14FontMapEntry;
+class GfxFontDictEntry;
+class FNVHash;
 
 //------------------------------------------------------------------------
 // GfxFontType
@@ -128,9 +129,14 @@ class GfxFont {
 public:
 
   // Build a GfxFont object.
-  static GfxFont *makeFont(XRef *xref, char *tagA, Ref idA, Dict *fontDict);
+  static GfxFont *makeFont(XRef *xref, const char *tagA,
+			   Ref idA, Dict *fontDict);
 
-  GfxFont(char *tagA, Ref idA, GString *nameA,
+  // Create a simple default font, to substitute for an undefined font
+  // object.
+  static GfxFont *makeDefaultFont(XRef *xref);
+
+  GfxFont(const char *tagA, Ref idA, GString *nameA,
 	  GfxFontType typeA, Ref embFontIDA);
 
   virtual ~GfxFont();
@@ -180,6 +186,7 @@ public:
   // Return the ascent and descent values.
   double getAscent() { return ascent; }
   double getDescent() { return descent; }
+  double getDeclaredAscent() { return declaredAscent; }
 
   // Return the writing mode (0=horizontal, 1=vertical).
   virtual int getWMode() { return 0; }
@@ -204,6 +211,15 @@ public:
 			  Unicode *u, int uSize, int *uLen,
 			  double *dx, double *dy, double *ox, double *oy) = 0;
 
+  // Returns true if this font is likely to be problematic when
+  // converting text to Unicode.
+  virtual GBool problematicForUnicode() = 0;
+
+  // Returns true if this font swaps the left and right parens in its
+  // ToUnicode map. This is likely a kludge used by bad PDF generators
+  // with Arabic fonts.
+  virtual GBool parensAreSwapped(XRef *xref) = 0;
+
 protected:
 
   static GfxFontType getFontType(XRef *xref, Dict *fontDict, Ref *embID);
@@ -225,6 +241,8 @@ protected:
   double missingWidth;		// "default" width
   double ascent;		// max height above baseline
   double descent;		// max depth below baseline
+  double declaredAscent;	// ascent value, before munging
+  GBool hasToUnicode;		// true if the font has a ToUnicode map
   GBool ok;
 };
 
@@ -235,7 +253,7 @@ protected:
 class Gfx8BitFont: public GfxFont {
 public:
 
-  Gfx8BitFont(XRef *xref, char *tagA, Ref idA, GString *nameA,
+  Gfx8BitFont(XRef *xref, const char *tagA, Ref idA, GString *nameA,
 	      GfxFontType typeA, Ref embFontIDA, Dict *fontDict);
 
   virtual ~Gfx8BitFont();
@@ -266,6 +284,10 @@ public:
   // (This is only useful for TrueType fonts.)
   int *getCodeToGIDMap(FoFiTrueType *ff);
 
+  // Return a char code-to-GID mapping for the provided font file.
+  // (This is only useful for Type1C fonts.)
+  int *getCodeToGIDMap(FoFiType1C *ff);
+
   // Return the Type 3 CharProc dictionary, or NULL if none.
   Dict *getCharProcs();
 
@@ -276,6 +298,10 @@ public:
   // Return the Type 3 Resources dictionary, or NULL if none.
   Dict *getResources();
 
+  virtual GBool problematicForUnicode();
+
+  virtual GBool parensAreSwapped(XRef *xref);
+
 private:
 
   Base14FontMapEntry *base14;	// for Base-14 fonts only; NULL otherwise
@@ -285,6 +311,8 @@ private:
   CharCodeToUnicode *ctu;	// char code --> Unicode
   GBool hasEncoding;
   GBool usesMacRomanEnc;
+  GBool baseEncFromFontFile;
+  GBool usedNumericHeuristic;
   double widths[256];		// character widths
   Object charProcs;		// Type 3 CharProcs dictionary
   Object resources;		// Type 3 Resources dictionary
@@ -299,7 +327,7 @@ private:
 class GfxCIDFont: public GfxFont {
 public:
 
-  GfxCIDFont(XRef *xref, char *tagA, Ref idA, GString *nameA,
+  GfxCIDFont(XRef *xref, const char *tagA, Ref idA, GString *nameA,
 	     GfxFontType typeA, Ref embFontIDA, Dict *fontDict);
 
   virtual ~GfxCIDFont();
@@ -319,12 +347,30 @@ public:
   // Get the collection name (<registry>-<ordering>).
   GString *getCollection();
 
+  // Return the horizontal width for <cid>.
+  double getWidth(CID cid);
+
   // Return the CID-to-GID mapping table.  These should only be called
   // if type is fontCIDType2.
   int *getCIDToGID() { return cidToGID; }
   int getCIDToGIDLen() { return cidToGIDLen; }
 
+  // Returns true if this font uses the Identity-H encoding (cmap),
+  // and the Adobe-Identity character collection, and does not have a
+  // CIDToGIDMap.  When this is true for a CID TrueType font, Adobe
+  // appears to treat char codes as raw GIDs.
+  GBool usesIdentityEncoding() { return identityEnc; }
+
+  virtual GBool problematicForUnicode();
+
+  virtual GBool parensAreSwapped(XRef *xref);
+
 private:
+
+  void readTrueTypeUnicodeMapping(XRef *xref);
+  void getHorizontalMetrics(CID cid, double *w);
+  void getVerticalMetrics(CID cid, double *h,
+			  double *vx, double *vy);
 
   GString *collection;		// collection name
   CMap *cMap;			// char code --> CID
@@ -335,6 +381,9 @@ private:
   int *cidToGID;		// CID --> GID mapping (for embedded
 				//   TrueType fonts)
   int cidToGIDLen;
+  GBool hasKnownCollection;
+  GBool hasIdentityCIDToGID;
+  GBool identityEnc;
 };
 
 //------------------------------------------------------------------------
@@ -345,7 +394,7 @@ class GfxFontDict {
 public:
 
   // Build the font dictionary, given the PDF font dictionary.
-  GfxFontDict(XRef *xref, Ref *fontDictRef, Dict *fontDict);
+  GfxFontDict(XRef *xrefA, Ref *fontDictRef, Dict *fontDict);
 
   // Destructor.
   ~GfxFontDict();
@@ -355,13 +404,25 @@ public:
   GfxFont *lookupByRef(Ref ref);
 
   // Iterative access.
-  int getNumFonts() { return numFonts; }
-  GfxFont *getFont(int i) { return fonts[i]; }
+  int getNumFonts();
+  GfxFont *getFont(int i);
 
 private:
 
-  GfxFont **fonts;		// list of fonts
-  int numFonts;			// number of fonts
+  friend class GfxFont;
+
+  void loadAll();
+  void load(char *tag, GfxFontDictEntry *entry);
+  static int hashFontObject(Object *obj);
+  static void hashFontObject1(Object *obj, FNVHash *h);
+
+  XRef *xref;
+  GHash *fonts;			// hash table of fonts, mapping from
+				//   tag to GfxFontDictEntry; this may
+				//   contain duplicates, i.e., two
+				//   tags that map to the same font
+  GList *uniqueFonts;		// list of all unique font objects (no dups)
+				//   that have been loaded
 };
 
 #endif

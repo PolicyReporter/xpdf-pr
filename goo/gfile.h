@@ -11,6 +11,7 @@
 #ifndef GFILE_H
 #define GFILE_H
 
+#include <aconf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -22,32 +23,18 @@
 #    include <windows.h>
 #  endif
 #elif defined(ACORN)
-#elif defined(MACOS)
-#  include <ctime.h>
 #elif defined(ANDROID)
 #else
 #  include <unistd.h>
 #  include <sys/types.h>
-#  ifdef VMS
-#    include "vms_dirent.h"
-#  elif HAVE_DIRENT_H
-#    include <dirent.h>
-#    define NAMLEN(d) strlen((d)->d_name)
-#  else
-#    define dirent direct
-#    define NAMLEN(d) (d)->d_namlen
-#    if HAVE_SYS_NDIR_H
-#      include <sys/ndir.h>
-#    endif
-#    if HAVE_SYS_DIR_H
-#      include <sys/dir.h>
-#    endif
-#    if HAVE_NDIR_H
-#      include <ndir.h>
-#    endif
-#  endif
 #endif
 #include "gtypes.h"
+
+// Windows 10 supports long paths - with a registry setting, and only
+// with Unicode (...W) functions.
+#ifdef _WIN32
+#  define winMaxLongPath 32767
+#endif
 
 class GString;
 
@@ -74,6 +61,12 @@ extern GBool isAbsolutePath(char *path);
 // relative) or prepending user's directory (if path starts with '~').
 extern GString *makePathAbsolute(GString *path);
 
+// Returns true if [path] exists and is a regular file.
+extern GBool pathIsFile(const char *path);
+
+// Returns true if [path] exists and is a directory.
+extern GBool pathIsDir(const char *path);
+
 // Get the modification time for <fileName>.  Returns 0 if there is an
 // error.
 extern time_t getModTime(char *fileName);
@@ -99,12 +92,30 @@ extern GString *fileNameToUTF8(char *path);
 
 // Convert a file name from UCS-2 to UTF-8.
 extern GString *fileNameToUTF8(wchar_t *path);
+
+// Convert a file name from the OEM code page to UTF-8.
+extern GString *fileNameMultiByteToUTF8(char *path);
+
+// Convert a file name from UTF-8 to UCS-2.  [out] has space for
+// [outSize] wchar_t elements (including the trailing zero).  Returns
+// [out].
+extern wchar_t *fileNameToUCS2(const char *path, wchar_t *out, size_t outSize);
 #endif
 
 // Open a file.  On Windows, this converts the path from UTF-8 to
-// UCS-2 and calls _wfopen (if available).  On other OSes, this simply
-// calls fopen.
+// UCS-2 and calls _wfopen().  On other OSes, this simply calls fopen().
 extern FILE *openFile(const char *path, const char *mode);
+
+#ifdef _WIN32
+// If [wPath] is a Windows shortcut (.lnk file), read the target path
+// and store it back into [wPath].
+extern void readWindowsShortcut(wchar_t *wPath, size_t wPathSize);
+#endif
+
+// Create a directory.  On Windows, this converts the path from UTF-8
+// to UCS-2 and calls _wmkdir(), ignoring the mode argument.  On other
+// OSes, this simply calls mkdir().
+extern int makeDir(const char *path, int mode);
 
 // Just like fgets, but handles Unix, Mac, and/or DOS end-of-line
 // conventions.
@@ -132,48 +143,8 @@ extern int gfseek(FILE *f, GFileOffset offset, int whence);
 // Like ftell, but returns a 64-bit file offset if available.
 extern GFileOffset gftell(FILE *f);
 
-//------------------------------------------------------------------------
-// GDir and GDirEntry
-//------------------------------------------------------------------------
-
-class GDirEntry {
-public:
-
-  GDirEntry(char *dirPath, char *nameA, GBool doStat);
-  ~GDirEntry();
-  GString *getName() { return name; }
-  GBool isDir() { return dir; }
-
-private:
-
-  GString *name;		// dir/file name
-  GBool dir;			// is it a directory?
-};
-
-class GDir {
-public:
-
-  GDir(char *name, GBool doStatA = gTrue);
-  ~GDir();
-  GDirEntry *getNextEntry();
-  void rewind();
-
-private:
-
-  GString *path;		// directory path
-  GBool doStat;			// call stat() for each entry?
-#if defined(_WIN32)
-  WIN32_FIND_DATAA ffd;
-  HANDLE hnd;
-#elif defined(ACORN)
-#elif defined(MACOS)
-#elif defined(ANDROID)
-#else
-  DIR *dir;			// the DIR structure from opendir()
-#ifdef VMS
-  GBool needParent;		// need to return an entry for [-]
-#endif
-#endif
-};
+// On Windows, this gets the Unicode command line and converts it to
+// UTF-8.  On other systems, this is a nop.
+extern void fixCommandLine(int *argc, char **argv[]);
 
 #endif

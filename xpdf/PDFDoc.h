@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include <stdio.h>
 #include "XRef.h"
 #include "Catalog.h"
@@ -23,10 +19,13 @@
 class GString;
 class BaseStream;
 class OutputDev;
+class Annots;
 class Links;
 class LinkAction;
 class LinkDest;
+class LocalParams;
 class Outline;
+class OutlineItem;
 class OptionalContent;
 class PDFCore;
 
@@ -39,12 +38,20 @@ public:
 
   PDFDoc(GString *fileNameA, GString *ownerPassword = NULL,
 	 GString *userPassword = NULL, PDFCore *coreA = NULL);
+
 #ifdef _WIN32
   PDFDoc(wchar_t *fileNameA, int fileNameLen, GString *ownerPassword = NULL,
 	 GString *userPassword = NULL, PDFCore *coreA = NULL);
 #endif
+
+  // This version takes a UTF-8 file name (which is only relevant on
+  // Windows).
+  PDFDoc(char *fileNameA, GString *ownerPassword = NULL,
+	 GString *userPassword = NULL, PDFCore *coreA = NULL);
+
   PDFDoc(BaseStream *strA, GString *ownerPassword = NULL,
 	 GString *userPassword = NULL, PDFCore *coreA = NULL);
+
   ~PDFDoc();
 
   // Was PDF document successfully opened?
@@ -64,6 +71,9 @@ public:
 
   // Get catalog.
   Catalog *getCatalog() { return catalog; }
+
+  // Get annotations.
+  Annots *getAnnots() { return annots; }
 
   // Get base stream.
   BaseStream *getBaseStream() { return str; }
@@ -91,26 +101,28 @@ public:
   Object *getStructTreeRoot() { return catalog->getStructTreeRoot(); }
 
   // Display a page.
-  void displayPage(OutputDev *out, int page,
+  void displayPage(OutputDev *out, LocalParams *localParams, int page,
 		   double hDPI, double vDPI, int rotate,
 		   GBool useMediaBox, GBool crop, GBool printing,
 		   GBool (*abortCheckCbk)(void *data) = NULL,
 		   void *abortCheckCbkData = NULL);
 
   // Display a range of pages.
-  void displayPages(OutputDev *out, int firstPage, int lastPage,
+  void displayPages(OutputDev *out, LocalParams *localParams,
+		    int firstPage, int lastPage,
 		    double hDPI, double vDPI, int rotate,
 		    GBool useMediaBox, GBool crop, GBool printing,
 		    GBool (*abortCheckCbk)(void *data) = NULL,
 		    void *abortCheckCbkData = NULL);
 
   // Display part of a page.
-  void displayPageSlice(OutputDev *out, int page,
+  void displayPageSlice(OutputDev *out, LocalParams *localParams, int page,
 			double hDPI, double vDPI, int rotate,
 			GBool useMediaBox, GBool crop, GBool printing,
 			int sliceX, int sliceY, int sliceW, int sliceH,
 			GBool (*abortCheckCbk)(void *data) = NULL,
 			void *abortCheckCbkData = NULL);
+
 
   // Find a page, given its object ID.  Returns page number, or 0 if
   // not found.
@@ -131,6 +143,10 @@ public:
 #ifndef DISABLE_OUTLINE
   // Return the outline object.
   Outline *getOutline() { return outline; }
+
+  // Return the target page number for an outline item.  Returns 0 if
+  // the item doesn't target a page in this PDF file.
+  int getOutlineTargetPage(OutlineItem *outlineItem);
 #endif
 
   // Return the OptionalContent object.
@@ -148,6 +164,10 @@ public:
     { return xref->okToCopy(ignoreOwnerPW); }
   GBool okToAddNotes(GBool ignoreOwnerPW = gFalse)
     { return xref->okToAddNotes(ignoreOwnerPW); }
+
+  // Is the PDF file damaged?  This checks to see if the xref table
+  // was constructed by the repair code.
+  GBool isDamaged() { return xref->isRepaired(); }
 
   // Is this document linearized?
   GBool isLinearized();
@@ -171,15 +191,20 @@ public:
     { return catalog->getEmbeddedFileName(idx); }
   int getEmbeddedFileNameLength(int idx)
     { return catalog->getEmbeddedFileNameLength(idx); }
-  GBool saveEmbeddedFile(int idx, char *path);
+  GBool saveEmbeddedFile(int idx, const char *path);
+  GBool saveEmbeddedFileU(int idx, const char *path);
 #ifdef _WIN32
-  GBool saveEmbeddedFile(int idx, wchar_t *path, int pathLen);
+  GBool saveEmbeddedFile(int idx, const wchar_t *path, int pathLen);
 #endif
   char *getEmbeddedFileMem(int idx, int *size);
+
+  // Return true if the document uses JavaScript.
+  GBool usesJavaScript() { return catalog->usesJavaScript(); }
 
 
 private:
 
+  void init(PDFCore *coreA);
   GBool setup(GString *ownerPassword, GString *userPassword);
   GBool setup2(GString *ownerPassword, GString *userPassword,
 	       GBool repairXRef);
@@ -197,6 +222,7 @@ private:
   double pdfVersion;
   XRef *xref;
   Catalog *catalog;
+  Annots *annots;
 #ifndef DISABLE_OUTLINE
   Outline *outline;
 #endif

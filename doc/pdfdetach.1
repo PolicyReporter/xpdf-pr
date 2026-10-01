@@ -1,8 +1,8 @@
-.\" Copyright 2013-2014 Glyph & Cog, LLC
-.TH pdfdetach 1 "28 May 2014"
+.\" Copyright 2013-2025 Glyph & Cog, LLC
+.TH pdfdetach 1 "14 Nov 2025"
 .SH NAME
 pdfdetach \- Portable Document Format (PDF) document embedded file
-extractor (version 3.04)
+extractor (version 4.06)
 .SH SYNOPSIS
 .B pdfdetach
 [options]
@@ -14,9 +14,8 @@ Document Format (PDF) file.
 .SH CONFIGURATION FILE
 Pdfdetach reads a configuration file at startup.  It first tries to
 find the user's private config file, ~/.xpdfrc.  If that doesn't
-exist, it looks for a system-wide config file, typically
-/usr/local/etc/xpdfrc (but this location can be changed when pdfinfo
-is built).  See the
+exist, it looks for a system-wide config file, typically /etc/xpdfrc
+(but this location can be changed when pdfinfo is built).  See the
 .BR xpdfrc (5)
 man page for details.
 .SH OPTIONS
@@ -87,10 +86,13 @@ Error opening an output file.
 3
 Error related to PDF permissions.
 .TP
+98
+Out of memory.
+.TP
 99
 Other error.
 .SH AUTHOR
-The pdfinfo software and documentation are copyright 1996-2014 Glyph &
+The pdfinfo software and documentation are copyright 1996-2025 Glyph &
 Cog, LLC.
 .SH "SEE ALSO"
 .BR xpdf (1),
@@ -104,4 +106,4 @@ Cog, LLC.
 .BR pdfimages (1),
 .BR xpdfrc (5)
 .br
-.B http://www.foolabs.com/xpdf/
+.B http://www.xpdfreader.com/

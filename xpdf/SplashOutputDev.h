@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "gtypes.h"
 #include "SplashTypes.h"
 #include "config.h"
@@ -23,6 +19,7 @@
 
 class Gfx8BitFont;
 class SplashBitmap;
+class SplashBitmapMemCache;
 class Splash;
 class SplashPath;
 class SplashPattern;
@@ -51,6 +48,7 @@ public:
 		  GBool bitmapTopDownA = gTrue,
 		  GBool allowAntialiasA = gTrue);
 
+
   // Destructor.
   virtual ~SplashOutputDev();
 
@@ -71,6 +69,7 @@ public:
   // Does this device use beginType3Char/endType3Char?  Otherwise,
   // text in Type 3 fonts will be drawn with drawChar/drawString.
   virtual GBool interpretType3Chars() { return gTrue; }
+
 
 
   //----- initialization and control
@@ -101,7 +100,9 @@ public:
   virtual void updateBlendMode(GfxState *state);
   virtual void updateFillOpacity(GfxState *state);
   virtual void updateStrokeOpacity(GfxState *state);
+  virtual void updateRenderingIntent(GfxState *state);
   virtual void updateTransfer(GfxState *state);
+  virtual void updateAlphaIsShape(GfxState *state);
 
   //----- update text state
   virtual void updateFont(GfxState *state);
@@ -111,10 +112,11 @@ public:
   virtual void fill(GfxState *state);
   virtual void eoFill(GfxState *state);
   virtual void tilingPatternFill(GfxState *state, Gfx *gfx, Object *strRef,
-				 int paintType, Dict *resDict,
+				 int paintType, int tilingType, Dict *resDict,
 				 double *mat, double *bbox,
 				 int x0, int y0, int x1, int y1,
 				 double xStep, double yStep);
+  virtual GBool shadedFill(GfxState *state, GfxShading *shading);
 
   //----- path clipping
   virtual void clip(GfxState *state);
@@ -125,7 +127,15 @@ public:
   virtual void drawChar(GfxState *state, double x, double y,
 			double dx, double dy,
 			double originX, double originY,
-			CharCode code, int nBytes, Unicode *u, int uLen);
+			CharCode code, int nBytes, Unicode *u, int uLen,
+			GBool fill, GBool stroke, GBool makePath);
+  virtual void fillTextPath(GfxState *state);
+  virtual void strokeTextPath(GfxState *state);
+  virtual void clipToTextPath(GfxState *state);
+  virtual void clipToTextStrokePath(GfxState *state);
+  virtual void clearTextPath(GfxState *state);
+  virtual void addTextPathToSavedClipPath(GfxState *state);
+  virtual void clipToSavedClipPath(GfxState *state);
   virtual GBool beginType3Char(GfxState *state, double x, double y,
 			       double dx, double dy,
 			       CharCode code, Unicode *u, int uLen);
@@ -146,15 +156,16 @@ public:
   virtual void drawMaskedImage(GfxState *state, Object *ref, Stream *str,
 			       int width, int height,
 			       GfxImageColorMap *colorMap,
-			       Stream *maskStr, int maskWidth, int maskHeight,
+			       Object *maskRef, Stream *maskStr,
+			       int maskWidth, int maskHeight,
 			       GBool maskInvert, GBool interpolate);
   virtual void drawSoftMaskedImage(GfxState *state, Object *ref, Stream *str,
 				   int width, int height,
 				   GfxImageColorMap *colorMap,
-				   Stream *maskStr,
+				   Object *maskRef, Stream *maskStr,
 				   int maskWidth, int maskHeight,
 				   GfxImageColorMap *maskColorMap,
-				   GBool interpolate);
+				   double *matte, GBool interpolate);
 
   //----- Type 3 font operators
   virtual void type3D0(GfxState *state, double wx, double wy);
@@ -162,10 +173,10 @@ public:
 		       double llx, double lly, double urx, double ury);
 
   //----- transparency groups and soft masks
-  virtual void beginTransparencyGroup(GfxState *state, double *bbox,
-				      GfxColorSpace *blendingColorSpace,
-				      GBool isolated, GBool knockout,
-				      GBool forSoftMask);
+  virtual GBool beginTransparencyGroup(GfxState *state, double *bbox,
+				       GfxColorSpace *blendingColorSpace,
+				       GBool isolated, GBool knockout,
+				       GBool forSoftMask);
   virtual void endTransparencyGroup(GfxState *state);
   virtual void paintTransparencyGroup(GfxState *state, double *bbox);
   virtual void setSoftMask(GfxState *state, double *bbox, GBool alpha,
@@ -176,6 +187,9 @@ public:
 
   // Called to indicate that a new PDF document has been loaded.
   void startDoc(XRef *xrefA);
+
+  void setStartPageCallback(void (*cbk)(void *data), void *data)
+    { startPageCbk = cbk; startPageCbkData = data; }
  
   void setPaperColor(SplashColorPtr paperColorA);
 
@@ -224,9 +238,10 @@ public:
   int getNestCount() { return nestCount; }
 
 
-#if 1 //~tmp: turn off anti-aliasing temporarily
-  virtual void setInShading(GBool sh);
-#endif
+  // Get the screen parameters.
+  SplashScreenParams *getScreenParams() { return &screenParams; }
+
+  SplashBitmapMemCache *getBitmapMemCache() { return bitmapMemCache; }
 
 private:
 
@@ -236,26 +251,72 @@ private:
 #if SPLASH_CMYK
   SplashPattern *getColor(GfxCMYK *cmyk);
 #endif
-  void setOverprintMask(GfxColorSpace *colorSpace, GBool overprintFlag,
-			int overprintMode, GfxColor *singleColor);
+  void getColor(GfxGray gray, SplashColorPtr color);
+  void getColor(GfxRGB *rgb, SplashColorPtr color);
+#if SPLASH_CMYK
+  void getColor(GfxCMYK *cmyk, SplashColorPtr color);
+#endif
+  void setOverprintMask(GfxState *state, GfxColorSpace *colorSpace,
+			GBool overprintFlag, int overprintMode,
+			GfxColor *singleColor);
   SplashPath *convertPath(GfxState *state, GfxPath *path,
 			  GBool dropEmptySubpaths);
   void doUpdateFont(GfxState *state);
   void drawType3Glyph(GfxState *state, T3FontCache *t3Font,
 		      T3FontCacheTag *tag, Guchar *data);
-  static GBool imageMaskSrc(void *data, SplashColorPtr line);
+  static GBool imageMaskSrc(void *data, Guchar *line);
   static GBool imageSrc(void *data, SplashColorPtr colorLine,
 			Guchar *alphaLine);
+  static GBool imageLookup1Src(void *data, SplashColorPtr colorLine,
+			       Guchar *alphaLine);
+  static GBool imageLookup2Src(void *data, SplashColorPtr colorLine,
+			       Guchar *alphaLine);
   static GBool alphaImageSrc(void *data, SplashColorPtr line,
 			     Guchar *alphaLine);
+  static GBool alphaImageLookup1Src(void *data, SplashColorPtr line,
+				    Guchar *alphaLine);
+  static GBool alphaImageLookup2Src(void *data, SplashColorPtr line,
+				    Guchar *alphaLine);
   static GBool maskedImageSrc(void *data, SplashColorPtr line,
 			      Guchar *alphaLine);
+  static GBool maskedImageLookup1Src(void *data, SplashColorPtr line,
+				     Guchar *alphaLine);
+  void drawMaskedImage8(GfxState *state, Object *ref,
+			Stream *str, int width, int height,
+			GfxImageColorMap *colorMap,
+			Object *maskRef, Stream *maskStr,
+			int maskWidth, int maskHeight,
+			GBool maskInvert, GBool interpolate);
+  static GBool softMaskMatteImageSrc(void *data,
+				     SplashColorPtr colorLine,
+				     Guchar *alphaLine);
+  void drawSoftMaskedImage8(GfxState *state, Object *ref,
+			    Stream *str, int width, int height,
+			    GfxImageColorMap *colorMap,
+			    Object *maskRef, Stream *maskStr,
+			    int maskWidth, int maskHeight,
+			    GfxImageColorMap *maskColorMap,
+			    double *matte, GBool interpolate);
+  void drawSoftMaskedMatteImage8(GfxState *state, Object *ref,
+				 Stream *str, int width, int height,
+				 GfxImageColorMap *colorMap,
+				 Object *maskRef, Stream *maskStr,
+				 int maskWidth, int maskHeight,
+				 GfxImageColorMap *maskColorMap,
+				 double *matte, GBool interpolate);
+  SplashColorPtr buildColorMapLookupTable1Idx(GfxImageColorMap *colorMap,
+					      GfxState *state);
+  SplashColorPtr buildColorMapLookupTable2Idx(GfxImageColorMap *colorMap,
+					      GfxState *state);
+  GString *makeImageTag(Object *ref, GfxRenderingIntent ri,
+			GfxColorSpace *colorSpace);
   void reduceImageResolution(Stream *str, double *mat,
 			     int *width, int *height);
   void clearMaskRegion(GfxState *state,
 		       Splash *maskSplash,
 		       double xMin, double yMin,
 		       double xMax, double yMax);
+  void copyState(Splash *oldSplash, GBool copyColors);
 
   SplashColorMode colorMode;
   int bitmapRowPad;
@@ -265,6 +326,7 @@ private:
   GBool allowAntialias;
   GBool vectorAntialias;
   GBool reverseVideo;		// reverse video mode
+  GBool reverseVideoInvertImages;
   SplashColor paperColor;	// paper color
   SplashScreenParams screenParams;
   GBool skipHorizText;
@@ -273,6 +335,7 @@ private:
   XRef *xref;			// xref table for current document
 
   SplashBitmap *bitmap;
+  SplashBitmapMemCache *bitmapMemCache;
   Splash *splash;
   SplashFontEngine *fontEngine;
 
@@ -281,14 +344,23 @@ private:
   int nT3Fonts;			// number of valid entries in t3FontCache
   T3GlyphStack *t3GlyphStack;	// Type 3 glyph context stack
 
+  Ref tileCacheRef;
+  double tileCacheBaseMatrix[6];
+  SplashBitmap *tileCacheBitmap;
+  Guint *tileCacheOverprintMaskBitmap;
+
   SplashFont *font;		// current font
   GBool needFontUpdate;		// set when the font needs to be updated
-  SplashPath *textClipPath;	// clipping path built with text object
+  SplashPath *savedTextPath;	// path built for text string
+  SplashPath *savedClipPath;	// clipping path built with text object
 
   SplashTransparencyGroup *	// transparency group stack
     transpGroupStack;
 
   int nestCount;
+
+  void (*startPageCbk)(void *data);
+  void *startPageCbkData;
 };
 
 #endif

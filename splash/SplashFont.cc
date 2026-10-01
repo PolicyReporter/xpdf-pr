@@ -8,12 +8,9 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <string.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "SplashMath.h"
 #include "SplashGlyphBitmap.h"
 #include "SplashFontFile.h"
@@ -29,7 +26,7 @@
 //------------------------------------------------------------------------
 
 struct SplashFontCacheTag {
-  int c;
+  Guint c;
   short xFrac, yFrac;		// x and y fractions
   int mru;			// valid bit (0x80000000) and MRU index
   int x, y, w, h;		// offset and size of glyph
@@ -66,6 +63,16 @@ void SplashFont::initCache() {
   // deal with rounding errors
   glyphW = xMax - xMin + 3;
   glyphH = yMax - yMin + 3;
+  if (glyphW > 1000 || glyphH > 1000) {
+    // if the glyphs are too large, don't cache them -- setting the
+    // cache bitmap size to something tiny will cause getGlyph() to
+    // fall back to the uncached case
+    glyphW = glyphH = 0;
+    glyphSize = 0;
+    cacheSets = 0;
+    cacheAssoc = 0;
+    return;
+  }
   if (aa) {
     glyphSize = glyphW * glyphH;
   } else {
@@ -76,7 +83,7 @@ void SplashFont::initCache() {
   cacheAssoc = splashFontCacheAssoc;
   for (cacheSets = splashFontCacheMaxSets;
        cacheSets > 1 &&
-	 cacheSets * cacheAssoc * glyphSize > splashFontCacheSize;
+	 glyphSize > splashFontCacheSize / (cacheSets * cacheAssoc);
        cacheSets >>= 1) ;
   cache = (Guchar *)gmallocn(cacheSets * cacheAssoc, glyphSize);
   cacheTags = (SplashFontCacheTag *)gmallocn(cacheSets * cacheAssoc,
@@ -96,7 +103,7 @@ SplashFont::~SplashFont() {
   }
 }
 
-GBool SplashFont::getGlyph(int c, int xFrac, int yFrac,
+GBool SplashFont::getGlyph(Guint c, int xFrac, int yFrac,
 			   SplashGlyphBitmap *bitmap) {
   SplashGlyphBitmap bitmap2;
   int size;
@@ -110,29 +117,33 @@ GBool SplashFont::getGlyph(int c, int xFrac, int yFrac,
   }
 
   // check the cache
-  i = (c & (cacheSets - 1)) * cacheAssoc;
-  for (j = 0; j < cacheAssoc; ++j) {
-    if ((cacheTags[i+j].mru & 0x80000000) &&
-	cacheTags[i+j].c == c &&
-	(int)cacheTags[i+j].xFrac == xFrac &&
-	(int)cacheTags[i+j].yFrac == yFrac) {
-      bitmap->x = cacheTags[i+j].x;
-      bitmap->y = cacheTags[i+j].y;
-      bitmap->w = cacheTags[i+j].w;
-      bitmap->h = cacheTags[i+j].h;
-      for (k = 0; k < cacheAssoc; ++k) {
-	if (k != j &&
-	    (cacheTags[i+k].mru & 0x7fffffff) <
+  if (cache) {
+    i = (c & (cacheSets - 1)) * cacheAssoc;
+    for (j = 0; j < cacheAssoc; ++j) {
+      if ((cacheTags[i+j].mru & 0x80000000) &&
+	  cacheTags[i+j].c == c &&
+	  (int)cacheTags[i+j].xFrac == xFrac &&
+	  (int)cacheTags[i+j].yFrac == yFrac) {
+	bitmap->x = cacheTags[i+j].x;
+	bitmap->y = cacheTags[i+j].y;
+	bitmap->w = cacheTags[i+j].w;
+	bitmap->h = cacheTags[i+j].h;
+	for (k = 0; k < cacheAssoc; ++k) {
+	  if (k != j &&
+	      (cacheTags[i+k].mru & 0x7fffffff) <
 	      (cacheTags[i+j].mru & 0x7fffffff)) {
-	  ++cacheTags[i+k].mru;
+	    ++cacheTags[i+k].mru;
+	  }
 	}
+	cacheTags[i+j].mru = 0x80000000;
+	bitmap->aa = aa;
+	bitmap->data = cache + (i+j) * glyphSize;
+	bitmap->freeData = gFalse;
+	return gTrue;
       }
-      cacheTags[i+j].mru = 0x80000000;
-      bitmap->aa = aa;
-      bitmap->data = cache + (i+j) * glyphSize;
-      bitmap->freeData = gFalse;
-      return gTrue;
     }
+  } else {
+    i = 0; // make gcc happy
   }
 
   // generate the glyph bitmap
@@ -142,7 +153,7 @@ GBool SplashFont::getGlyph(int c, int xFrac, int yFrac,
 
   // if the glyph doesn't fit in the bounding box, return a temporary
   // uncached bitmap
-  if (bitmap2.w > glyphW || bitmap2.h > glyphH) {
+  if (!cache || bitmap2.w > glyphW || bitmap2.h > glyphH) {
     *bitmap = bitmap2;
     return gTrue;
   }

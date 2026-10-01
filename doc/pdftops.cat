@@ -1,10 +1,10 @@
-pdftops(1)                                                          pdftops(1)
+pdftops(1)                  General Commands Manual                 pdftops(1)
 
 
 
 NAME
        pdftops  - Portable Document Format (PDF) to PostScript converter (ver-
-       sion 3.04)
+       sion 4.06)
 
 SYNOPSIS
        pdftops [options] [PDF-file [PS-file]]
@@ -21,9 +21,9 @@ DESCRIPTION
 CONFIGURATION FILE
        Pdftops reads a configuration file at startup.  It first tries to  find
        the  user's  private config file, ~/.xpdfrc.  If that doesn't exist, it
-       looks for a system-wide config  file,  typically  /usr/local/etc/xpdfrc
-       (but  this  location  can  be  changed when pdftops is built).  See the
-       xpdfrc(5) man page for details.
+       looks for a system-wide config file, typically  /etc/xpdfrc  (but  this
+       location  can be changed when pdftops is built).  See the xpdfrc(5) man
+       page for details.
 
 OPTIONS
        Many of the following options can be set with configuration  file  com-
@@ -40,9 +40,9 @@ OPTIONS
               Generate Level 1 PostScript.   The  resulting  PostScript  files
               will  be significantly larger (if they contain images), but will
               print on Level 1 printers.  This also  converts  all  images  to
-              black  and  white.   No  more  than  one of the PostScript level
-              options  (-level1,  -level1sep,  -level2,  -level2sep,  -level3,
-              -level3Sep) may be given.  [config file: psLevel]
+              black  and  white.  No more than one of the PostScript level op-
+              tions  (-level1,  -level1sep,  -level2,   -level2sep,   -level3,
+              -level3sep) may be given.  [config file: psLevel]
 
        -level1sep
               Generate Level 1 separable PostScript.  All colors are converted
@@ -54,19 +54,27 @@ OPTIONS
               image compression.  This is the default setting.  [config  file:
               psLevel]
 
+       -level2gray
+              Generate  grayscale  Level  2 PostScript.  All colors, including
+              images, are converted to grayscale.  [config file: psLevel]
+
        -level2sep
               Generate Level 2 separable PostScript.  All colors are converted
-              to CMYK.  The PostScript  separation  convention  operators  are
+              to  CMYK.   The  PostScript  separation convention operators are
               used to handle custom (spot) colors.  [config file: psLevel]
 
        -level3
-              Generate  Level 3 PostScript.  This enables all Level 2 features
-              plus CID font embedding and masked  image  generation.   [config
+              Generate Level 3 PostScript.  This enables all Level 2  features
+              plus  CID  font  embedding and masked image generation.  [config
               file: psLevel]
 
-       -level3Sep
+       -level3gray
+              Generate grayscale Level 3 PostScript.   All  colors,  including
+              images, are converted to grayscale.  [config file: psLevel]
+
+       -level3sep
               Generate  Level 3 separable PostScript.  The separation handling
-              is the same as for -level2Sep.  [config file: psLevel]
+              is the same as for -level2sep.  [config file: psLevel]
 
        -eps   Generate an Encapsulated PostScript (EPS)  file.   An  EPS  file
               contains a single image, so if you use this option with a multi-
@@ -139,8 +147,8 @@ OPTIONS
               maller]
 
        -noshrink
-              Don't scale PDF pages which  are  larger  than  the  paper.   By
-              default, pages larger than the paper are shrunk to fit.  [config
+              Don't scale PDF pages which are larger than the paper.   By  de-
+              fault,  pages  larger than the paper are shrunk to fit.  [config
               file: psShrinkLarger]
 
        -nocenter
@@ -153,17 +161,25 @@ OPTIONS
               Treat  the CropBox as the PDF page size.  By default, the Media-
               Box is used as the page size.  [config file: psUseCropBoxAsPage]
 
+       -userunit
+              Honor the UserUnit settings on PDF pages when computing page/pa-
+              per size.  By default, pdftops ignores UserUnit.
+
        -duplex
-              Set the Duplex pagedevice entry in the  PostScript  file.   This
-              tells  duplex-capable  printers  to  enable  duplexing.  [config
+              Set  the  Duplex  pagedevice entry in the PostScript file.  This
+              tells duplex-capable  printers  to  enable  duplexing.   [config
               file: psDuplex]
 
        -opw password
-              Specify the owner password for the  PDF  file.   Providing  this
+              Specify  the  owner  password  for the PDF file.  Providing this
               will bypass all security restrictions.
 
        -upw password
               Specify the user password for the PDF file.
+
+       -verbose
+              Print a status message (to stdout) before processing each  page.
+              [config file: printStatusInfo]
 
        -q     Don't print any messages or errors.  [config file: errQuiet]
 
@@ -186,17 +202,19 @@ EXIT CODES
 
        3      Error related to PDF permissions.
 
+       98     Out of memory.
+
        99     Other error.
 
 AUTHOR
-       The pdftops software and documentation are copyright 1996-2014 Glyph  &
+       The pdftops software and documentation are copyright 1996-2025 Glyph  &
        Cog, LLC.
 
 SEE ALSO
        xpdf(1),  pdftotext(1),  pdftohtml(1),  pdfinfo(1), pdffonts(1), pdfde-
        tach(1), pdftoppm(1), pdftopng(1), pdfimages(1), xpdfrc(5)
-       http://www.foolabs.com/xpdf/
+       http://www.xpdfreader.com/
 
 
 
-                                  28 May 2014                       pdftops(1)
+                                  14 Nov 2025                       pdftops(1)

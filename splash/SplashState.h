@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "SplashTypes.h"
 
 class SplashPattern;
@@ -70,6 +66,10 @@ public:
   void setLineDash(SplashCoord *lineDashA, int lineDashLengthA,
 		   SplashCoord lineDashPhaseA);
 
+  // Returns true if the current line dash pattern contains one or
+  // more zero-length "on" sections (dashes).
+  GBool lineDashContainsZeroLengthDashes();
+
   void clipResetToRect(SplashCoord x0, SplashCoord y0,
 		       SplashCoord x1, SplashCoord y1);
   SplashError clipToRect(SplashCoord x0, SplashCoord y0,
@@ -77,10 +77,11 @@ public:
   SplashError clipToPath(SplashPath *path, GBool eo);
 
   // Set the soft mask bitmap.
-  void setSoftMask(SplashBitmap *softMaskA);
+  void setSoftMask(SplashBitmap *softMaskA, GBool deleteBitmap = gTrue);
 
   // Set the transfer function.
   void setTransfer(Guchar *red, Guchar *green, Guchar *blue, Guchar *gray);
+
 
 private:
 
@@ -101,22 +102,28 @@ private:
   SplashCoord *lineDash;
   int lineDashLength;
   SplashCoord lineDashPhase;
-  GBool strokeAdjust;
+  SplashStrokeAdjustMode strokeAdjust;
+  GBool alphaIsShape;
   SplashClip *clip;
   GBool clipIsShared;
   SplashBitmap *softMask;
   GBool deleteSoftMask;
   GBool inNonIsolatedGroup;
   GBool inKnockoutGroup;
-  Guchar rgbTransferR[256],
-         rgbTransferG[256],
-         rgbTransferB[256];
-  Guchar grayTransfer[256];
-  Guchar cmykTransferC[256],
-         cmykTransferM[256],
-         cmykTransferY[256],
-         cmykTransferK[256];
+  Guchar *rgbTransferR;
+  Guchar *rgbTransferG;
+  Guchar *rgbTransferB;
+  Guchar *grayTransfer;
+#if SPLASH_CMYK
+  Guchar *cmykTransferC;
+  Guchar *cmykTransferM;
+  Guchar *cmykTransferY;
+  Guchar *cmykTransferK;
+#endif
+  GBool transferIsShared;
   Guint overprintMask;
+  GBool enablePathSimplification;
+
 
   SplashState *next;		// used by Splash class
 

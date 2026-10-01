@@ -8,12 +8,9 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
+#include "gmempp.h"
 #include "PSTokenizer.h"
 
 //------------------------------------------------------------------------
@@ -76,12 +73,12 @@ GBool PSTokenizer::getToken(char *buf, int size, int *length) {
 
   // read a token
   i = 0;
-  buf[i++] = c;
+  buf[i++] = (char)c;
   if (c == '(') {
     backslash = gFalse;
     while ((c = lookChar()) != EOF) {
       if (i < size - 1) {
-	buf[i++] = c;
+	buf[i++] = (char)c;
       }
       getChar();
       if (c == '\\') {
@@ -96,7 +93,7 @@ GBool PSTokenizer::getToken(char *buf, int size, int *length) {
     while ((c = lookChar()) != EOF) {
       getChar();
       if (i < size - 1 && specialChars[c] != 1) {
-	buf[i++] = c;
+	buf[i++] = (char)c;
       }
       if (c == '>') {
 	break;
@@ -106,7 +103,7 @@ GBool PSTokenizer::getToken(char *buf, int size, int *length) {
     while ((c = lookChar()) != EOF && !specialChars[c]) {
       getChar();
       if (i < size - 1) {
-	buf[i++] = c;
+	buf[i++] = (char)c;
       }
     }
   }

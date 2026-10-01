@@ -15,9 +15,11 @@
 #  include <fenv.h>
 #  include <fpu_control.h>
 #endif
+#include "gmem.h"
+#include "gmempp.h"
 #include "parseargs.h"
 #include "GString.h"
-#include "gmem.h"
+#include "GList.h"
 #include "GlobalParams.h"
 #include "Object.h"
 #include "Stream.h"
@@ -37,19 +39,29 @@
 static int firstPage = 1;
 static int lastPage = 0;
 static GBool physLayout = gFalse;
+static GBool simpleLayout = gFalse;
+static GBool simple2Layout = gFalse;
 static GBool tableLayout = gFalse;
 static GBool linePrinter = gFalse;
 static GBool rawOrder = gFalse;
 static double fixedPitch = 0;
 static double fixedLineSpacing = 0;
 static GBool clipText = gFalse;
+static GBool discardDiag = gFalse;
 static char textEncName[128] = "";
 static char textEOL[16] = "";
 static GBool noPageBreaks = gFalse;
+static GBool insertBOM = gFalse;
+static double marginLeft = 0;
+static double marginRight = 0;
+static double marginTop = 0;
+static double marginBottom = 0;
 static char ownerPassword[33] = "\001";
 static char userPassword[33] = "\001";
+static GBool verbose = gFalse;
 static GBool quiet = gFalse;
 static char cfgFileName[256] = "";
+static GBool listEncodings = gFalse;
 static GBool printVersion = gFalse;
 static GBool printHelp = gFalse;
 
@@ -60,6 +72,10 @@ static ArgDesc argDesc[] = {
    "last page to convert"},
   {"-layout",  argFlag,     &physLayout,    0,
    "maintain original physical layout"},
+  {"-simple",  argFlag,     &simpleLayout,  0,
+   "simple one-column page layout"},
+  {"-simple2", argFlag,     &simple2Layout, 0,
+   "simple one-column page layout, version 2"},
   {"-table",   argFlag,     &tableLayout,   0,
    "similar to -layout, but optimized for tables"},
   {"-lineprinter", argFlag, &linePrinter,   0,
@@ -72,20 +88,36 @@ static ArgDesc argDesc[] = {
    "fixed line spacing for LinePrinter mode"},
   {"-clip",    argFlag,     &clipText,      0,
    "separate clipped text"},
+  {"-nodiag",  argFlag,     &discardDiag,   0,
+   "discard diagonal text"},
   {"-enc",     argString,   textEncName,    sizeof(textEncName),
    "output text encoding name"},
   {"-eol",     argString,   textEOL,        sizeof(textEOL),
    "output end-of-line convention (unix, dos, or mac)"},
   {"-nopgbrk", argFlag,     &noPageBreaks,  0,
-   "don't insert page breaks between pages"},
+   "don't insert a page break at the end of each page"},
+  {"-bom",     argFlag,     &insertBOM,     0,
+   "insert a Unicode BOM at the start of the text file"},
+  {"-marginl", argFP,       &marginLeft,    0,
+   "left page margin"},
+  {"-marginr", argFP,       &marginRight,   0,
+   "right page margin"},
+  {"-margint", argFP,       &marginTop,     0,
+   "top page margin"},
+  {"-marginb", argFP,       &marginBottom,  0,
+   "bottom page margin"},
   {"-opw",     argString,   ownerPassword,  sizeof(ownerPassword),
    "owner password (for encrypted files)"},
   {"-upw",     argString,   userPassword,   sizeof(userPassword),
    "user password (for encrypted files)"},
+  {"-verbose", argFlag,    &verbose,       0,
+   "print per-page status information"},
   {"-q",       argFlag,     &quiet,         0,
    "don't print any messages or errors"},
   {"-cfg",     argString,   cfgFileName,    sizeof(cfgFileName),
    "configuration file to use in place of .xpdfrc"},
+  {"-listencodings", argFlag, &listEncodings, 0,
+   "list all available output text encodings"},
   {"-v",       argFlag,     &printVersion,  0,
    "print copyright and version info"},
   {"-h",       argFlag,     &printHelp,     0,
@@ -100,14 +132,17 @@ static ArgDesc argDesc[] = {
 };
 
 int main(int argc, char *argv[]) {
+#if USE_EXCEPTIONS
+  try {
+#endif
+
   PDFDoc *doc;
-  GString *fileName;
+  char *fileName;
   GString *textFileName;
   GString *ownerPW, *userPW;
   TextOutputControl textOutControl;
   TextOutputDev *textOut;
   UnicodeMap *uMap;
-  Object info;
   GBool ok;
   char *p;
   int exitCode;
@@ -121,27 +156,50 @@ int main(int argc, char *argv[]) {
   // emulation (yes, this is a kludge; but it's pretty much
   // unavoidable given the x87 instruction set; see gcc bug 323 for
   // more info)
-  fpu_control_t cw; 
+  fpu_control_t cw;
   _FPU_GETCW(cw);
-  cw = (cw & ~_FPU_EXTENDED) | _FPU_DOUBLE;
+  cw = (fpu_control_t)((cw & ~_FPU_EXTENDED) | _FPU_DOUBLE);
   _FPU_SETCW(cw);
 #endif
 
   exitCode = 99;
 
   // parse args
+  fixCommandLine(&argc, &argv);
   ok = parseArgs(argDesc, &argc, argv);
-  if (!ok || argc < 2 || argc > 3 || printVersion || printHelp) {
-    fprintf(stderr, "pdftotext version %s\n", xpdfVersion);
-    fprintf(stderr, "%s\n", xpdfCopyright);
-    if (!printVersion) {
-      printUsage("pdftotext", "<PDF-file> [<text-file>]", argDesc);
+  if (ok && listEncodings) {
+    // list available encodings
+    if (cfgFileName[0] && !pathIsFile(cfgFileName)) {
+      error(errConfig, -1, "Config file '{0:s}' doesn't exist or isn't a file",
+	    cfgFileName);
     }
+    globalParams = new GlobalParams(cfgFileName);
+    GList *encs = globalParams->getAvailableTextEncodings();
+    for (int i = 0; i < encs->getLength(); ++i) {
+      printf("%s\n", ((GString *)encs->get(i))->getCString());
+    }
+    deleteGList(encs, GString);
+    delete globalParams;
     goto err0;
   }
-  fileName = new GString(argv[1]);
+  if (printVersion) {
+    printf("pdftotext version %s [www.xpdfreader.com]\n", xpdfVersion);
+    printf("%s\n", xpdfCopyright);
+    goto err0;
+  }
+  if (!ok || argc < 2 || argc > 3 || printHelp) {
+    fprintf(stderr, "pdftotext version %s [www.xpdfreader.com]\n", xpdfVersion);
+    fprintf(stderr, "%s\n", xpdfCopyright);
+    printUsage("pdftotext", "<PDF-file> [<text-file>]", argDesc);
+    goto err0;
+  }
+  fileName = argv[1];
 
   // read config file
+  if (cfgFileName[0] && !pathIsFile(cfgFileName)) {
+    error(errConfig, -1, "Config file '{0:s}' doesn't exist or isn't a file",
+	  cfgFileName);
+  }
   globalParams = new GlobalParams(cfgFileName);
   if (textEncName[0]) {
     globalParams->setTextEncoding(textEncName);
@@ -154,6 +212,9 @@ int main(int argc, char *argv[]) {
   if (noPageBreaks) {
     globalParams->setTextPageBreaks(gFalse);
   }
+  if (verbose) {
+    globalParams->setPrintStatusInfo(verbose);
+  }
   if (quiet) {
     globalParams->setErrQuiet(quiet);
   }
@@ -161,7 +222,6 @@ int main(int argc, char *argv[]) {
   // get mapping to output encoding
   if (!(uMap = globalParams->getTextEncoding())) {
     error(errConfig, -1, "Couldn't get text encoding");
-    delete fileName;
     goto err1;
   }
 
@@ -200,14 +260,16 @@ int main(int argc, char *argv[]) {
   if (argc == 3) {
     textFileName = new GString(argv[2]);
   } else {
-    p = fileName->getCString() + fileName->getLength() - 4;
-    if (!strcmp(p, ".pdf") || !strcmp(p, ".PDF")) {
-      textFileName = new GString(fileName->getCString(),
-				 fileName->getLength() - 4);
+    p = fileName + strlen(fileName) - 4;
+    if (strlen(fileName) > 4 && (!strcmp(p, ".pdf") || !strcmp(p, ".PDF"))) {
+      textFileName = new GString(fileName, (int)strlen(fileName) - 4);
     } else {
-      textFileName = fileName->copy();
+      textFileName = new GString(fileName);
     }
     textFileName->append(".txt");
+  }
+  if (textFileName->cmp("-") == 0) {
+    globalParams->setPrintStatusInfo(gFalse);
   }
 
   // get page range
@@ -225,6 +287,10 @@ int main(int argc, char *argv[]) {
   } else if (physLayout) {
     textOutControl.mode = textOutPhysLayout;
     textOutControl.fixedPitch = fixedPitch;
+  } else if (simpleLayout) {
+    textOutControl.mode = textOutSimpleLayout;
+  } else if (simple2Layout) {
+    textOutControl.mode = textOutSimple2Layout;
   } else if (linePrinter) {
     textOutControl.mode = textOutLinePrinter;
     textOutControl.fixedPitch = fixedPitch;
@@ -235,10 +301,16 @@ int main(int argc, char *argv[]) {
     textOutControl.mode = textOutReadingOrder;
   }
   textOutControl.clipText = clipText;
+  textOutControl.discardDiagonalText = discardDiag;
+  textOutControl.insertBOM = insertBOM;
+  textOutControl.marginLeft = marginLeft;
+  textOutControl.marginRight = marginRight;
+  textOutControl.marginTop = marginTop;
+  textOutControl.marginBottom = marginBottom;
   textOut = new TextOutputDev(textFileName->getCString(), &textOutControl,
-			      gFalse);
+			      gFalse, gTrue);
   if (textOut->isOk()) {
-    doc->displayPages(textOut, firstPage, lastPage, 72, 72, 0,
+    doc->displayPages(textOut, NULL, firstPage, lastPage, 72, 72, 0,
 		      gFalse, gTrue, gFalse);
   } else {
     delete textOut;
@@ -264,4 +336,11 @@ int main(int argc, char *argv[]) {
   gMemReport(stderr);
 
   return exitCode;
+
+#if USE_EXCEPTIONS
+  } catch (GMemException e) {
+    fprintf(stderr, "Out of memory\n");
+    return 98;
+  }
+#endif
 }

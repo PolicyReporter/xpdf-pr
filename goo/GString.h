@@ -13,10 +13,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include <limits.h> // for LLONG_MAX and ULLONG_MAX
 #include <stdarg.h>
 #include "gtypes.h"
@@ -88,9 +84,6 @@ public:
   // Change <i>th character.
   void setChar(int i, char c) { s[i] = c; }
 
-  // Replace a character with another
-  GString *replaceChar(char oldChar, char newChar);
-
   // Clear string to zero length.
   GString *clear();
 
@@ -123,7 +116,6 @@ public:
   int cmp(const char *sA);
   int cmpN(const char *sA, int n);
 
-    GString *htmlEscape();
 private:
 
   int length;

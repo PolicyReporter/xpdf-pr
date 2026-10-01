@@ -11,10 +11,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "gtypes.h"
 
 struct BuiltinFont;
@@ -25,6 +21,7 @@ class BuiltinFontWidths;
 struct BuiltinFont {
   const char *name;
   const char **defaultBaseEnc;
+  short missingWidth;
   short ascent;
   short descent;
   short bbox[4];

@@ -8,11 +8,8 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stddef.h>
+#include "gmempp.h"
 #include "Object.h"
 #include "Array.h"
 #include "Dict.h"
@@ -41,10 +38,15 @@ const char *objTypeNames[numObjTypes] = {
   "none"
 };
 
-#ifdef DEBUG_MEM
-int Object::numAlloc[numObjTypes] =
+#ifdef DEBUG_OBJECT_MEM
+#if MULTITHREADED
+GAtomicCounter Object::numAlloc[numObjTypes] =
+  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+#else
+long Object::numAlloc[numObjTypes] =
   {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 #endif
+#endif // DEBUG_OBJECT_MEM
 
 Object *Object::initArray(XRef *xref) {
   initObj(objArray);
@@ -87,7 +89,7 @@ Object *Object::copy(Object *obj) {
     dict->incRef();
     break;
   case objStream:
-    stream->incRef();
+    obj->stream = stream->copy();
     break;
   case objCmd:
     obj->cmd = copyString(cmd);
@@ -95,8 +97,12 @@ Object *Object::copy(Object *obj) {
   default:
     break;
   }
-#ifdef DEBUG_MEM
+#ifdef DEBUG_OBJECT_MEM
+#if MULTITHREADED
+  gAtomicIncrement(&numAlloc[type]);
+#else
   ++numAlloc[type];
+#endif
 #endif
   return obj;
 }
@@ -125,9 +131,7 @@ void Object::free() {
     }
     break;
   case objStream:
-    if (!stream->decRef()) {
-      delete stream;
-    }
+    delete stream;
     break;
   case objCmd:
     gfree(cmd);
@@ -135,8 +139,12 @@ void Object::free() {
   default:
     break;
   }
-#ifdef DEBUG_MEM
+#ifdef DEBUG_OBJECT_MEM
+#if MULTITHREADED
+  gAtomicDecrement(&numAlloc[type]);
+#else
   --numAlloc[type];
+#endif
 #endif
   type = objNone;
 }
@@ -213,18 +221,20 @@ void Object::print(FILE *f) {
 }
 
 void Object::memCheck(FILE *f) {
-#ifdef DEBUG_MEM
+#ifdef DEBUG_OBJECT_MEM
   int i;
-  int t;
+  long t;
 
   t = 0;
-  for (i = 0; i < numObjTypes; ++i)
+  for (i = 0; i < numObjTypes; ++i) {
     t += numAlloc[i];
+  }
   if (t > 0) {
     fprintf(f, "Allocated objects:\n");
     for (i = 0; i < numObjTypes; ++i) {
-      if (numAlloc[i] > 0)
-	fprintf(f, "  %-20s: %6d\n", objTypeNames[i], numAlloc[i]);
+      if (numAlloc[i] > 0) {
+	fprintf(f, "  %-20s: %6ld\n", objTypeNames[i], numAlloc[i]);
+      }
     }
   }
 #endif

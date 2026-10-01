@@ -1,31 +1,51 @@
-Subject: ANNOUNCE: Xpdf 3.04 - a PDF viewer for X
-
+Subject: ANNOUNCE: Xpdf 4.06 - a PDF viewer and related tools
 
 Glyph & Cog, LLC is pleased to announce a new version of Xpdf, the
-open source Portable Document Format (PDF) viewer for X.  The Xpdf
-project also includes a PDF text extractor, PDF-to-PostScript
-converter, and various other utilities.
+open source Portable Document Format (PDF) viewer.  The Xpdf project
+also includes a PDF text extractor, PDF-to-PostScript converter, and
+various other utilities.
 
-Xpdf runs under the X Window System on Unix, and OS/2.  The non-X
-components (pdftops, pdftotext, etc.) also run on Win32 systems and
-should run on pretty much any system with a decent C++ compiler.
+Xpdf uses the Qt toolkit and runs on Linux and Windows.  The
+non-graphical components (pdftops, pdftotext, etc.) run on Linux,
+Unix, Windows, MacOSX, and pretty much any other system with a decent
+C++ compiler.
 
-Major changes:
-* New text extractor.
-* Added the pdftohtml tool.
-* Added the pdftopng tool.
-* New trapezoid-based rasterizer core (for performance).
+4.06 is primarily a bug fix release.  There are some new features:
+
+* New command line options/features:
+  - Added the '-listonly' flag to pdfimages.
+  - Added the '-u' option to pdfimages.
+  - Added the '-J' option to pdfimages to dump JPEG 2000 images.
+  - Modified pdftohtml to generate a nicer index page; add the
+    '-noframe' option to generate the previous-style index page.
+
+* New configuration options:
+  - Added the 'initialMaximized' xpdfrc setting.
+  - Added the 'discardCoveredText' xpdfrc setting.
+  - Added the 'preferXFAFieldValues' xpdfrc setting.
+
+* XpdfReader improvements:
+  - Added the reverseVideoMode, normalVideoMode, and toggleVideoMode
+    commands; added the view -> reverse video menu item.
+  - Added a '%t' escape to include the currently selected text in the
+    argument to xpdf's 'run' command.
+  - Use the XDG config and state file directories on Linux.
+  - Added a file:close menu item to Xpdf.
+
+* Misc changes:
+  - Changed the default from Level 2 to Level 3 PostScript.
+  - Added support to pdftohtml for internal links (i.e., links to
+    pages in the same document).
 
 See the `CHANGES' file for a complete list of changes.
 
 Source (C++ and C) is available, and it should be fairly easy to
-compile for UNIX, OS/2, and Win32.
+compile for Linux and Windows.
 
 More information, source code, and precompiled binaries are on the
-xpdf web page and ftp site:
+xpdf web page:
 
-    http://www.foolabs.com/xpdf/
-    ftp://ftp.foolabs.com/pub/xpdf/
+    http://www.xpdfreader.com/
 
 For information on commercial licensing and consulting, please see the
 Glyph & Cog web site:

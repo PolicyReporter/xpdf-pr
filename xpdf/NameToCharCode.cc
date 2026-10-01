@@ -8,12 +8,9 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <string.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "NameToCharCode.h"
 
 //------------------------------------------------------------------------

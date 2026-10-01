@@ -8,16 +8,13 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "gfile.h"
 #include "Object.h"
 #include "Stream.h"
@@ -54,6 +51,8 @@ public:
   ~XRefPosSet();
   void add(GFileOffset pos);
   GBool check(GFileOffset pos);
+  int getLength() { return len; }
+  GFileOffset get(int idx) { return tab[idx]; }
 
 private:
 
@@ -130,7 +129,7 @@ public:
 
   // Create an object stream, using object number <objStrNum>,
   // generation 0.
-  ObjectStream(XRef *xref, int objStrNumA);
+  ObjectStream(XRef *xref, int objStrNumA, int recursion);
 
   GBool isOk() { return ok; }
 
@@ -152,8 +151,9 @@ private:
   GBool ok;
 };
 
-ObjectStream::ObjectStream(XRef *xref, int objStrNumA) {
+ObjectStream::ObjectStream(XRef *xref, int objStrNumA, int recursion) {
   Stream *str;
+  Lexer *lexer;
   Parser *parser;
   int *offsets;
   Object objStr, obj1, obj2;
@@ -165,11 +165,11 @@ ObjectStream::ObjectStream(XRef *xref, int objStrNumA) {
   objNums = NULL;
   ok = gFalse;
 
-  if (!xref->fetch(objStrNum, 0, &objStr)->isStream()) {
+  if (!xref->fetch(objStrNum, 0, &objStr, recursion)->isStream()) {
     goto err1;
   }
 
-  if (!objStr.streamGetDict()->lookup("N", &obj1)->isInt()) {
+  if (!objStr.streamGetDict()->lookup("N", &obj1, recursion)->isInt()) {
     obj1.free();
     goto err1;
   }
@@ -179,7 +179,7 @@ ObjectStream::ObjectStream(XRef *xref, int objStrNumA) {
     goto err1;
   }
 
-  if (!objStr.streamGetDict()->lookup("First", &obj1)->isInt()) {
+  if (!objStr.streamGetDict()->lookup("First", &obj1, recursion)->isInt()) {
     obj1.free();
     goto err1;
   }
@@ -204,7 +204,8 @@ ObjectStream::ObjectStream(XRef *xref, int objStrNumA) {
   objStr.streamReset();
   obj1.initNull();
   str = new EmbedStream(objStr.getStream(), &obj1, gTrue, first);
-  parser = new Parser(xref, new Lexer(xref, str), gFalse);
+  lexer = new Lexer(xref, str);
+  parser = new Parser(xref, lexer, gFalse);
   for (i = 0; i < nObjects; ++i) {
     parser->getObj(&obj1, gTrue);
     parser->getObj(&obj2, gTrue);
@@ -226,14 +227,13 @@ ObjectStream::ObjectStream(XRef *xref, int objStrNumA) {
       goto err2;
     }
   }
-  while (str->getChar() != EOF) ;
+  lexer->skipToEOF();
   delete parser;
 
-  // skip to the first object - this shouldn't be necessary because
-  // the First key is supposed to be equal to offsets[0], but just in
-  // case...
-  if (i < offsets[0]) {
-    objStr.getStream()->discardChars(offsets[0] - i);
+  // skip to the first object - this generally shouldn't be needed,
+  // because offsets[0] is normally 0, but just in case...
+  if (offsets[0] > 0) {
+    objStr.getStream()->discardChars(offsets[0]);
   }
 
   // parse the objects
@@ -245,9 +245,10 @@ ObjectStream::ObjectStream(XRef *xref, int objStrNumA) {
       str = new EmbedStream(objStr.getStream(), &obj1, gTrue,
 			    offsets[i+1] - offsets[i]);
     }
-    parser = new Parser(xref, new Lexer(xref, str), gFalse);
+    lexer = new Lexer(xref, str);
+    parser = new Parser(xref, lexer, gFalse);
     parser->getObj(&objs[i]);
-    while (str->getChar() != EOF) ;
+    lexer->skipToEOF();
     delete parser;
   }
 
@@ -274,9 +275,11 @@ ObjectStream::~ObjectStream() {
 
 Object *ObjectStream::getObject(int objIdx, int objNum, Object *obj) {
   if (objIdx < 0 || objIdx >= nObjects || objNum != objNums[objIdx]) {
-    return obj->initNull();
+    obj->initNull();
+  } else {
+    objs[objIdx].copy(obj);
   }
-  return objs[objIdx].copy(obj);
+  return obj;
 }
 
 //------------------------------------------------------------------------
@@ -291,14 +294,21 @@ XRef::XRef(BaseStream *strA, GBool repair) {
 
   ok = gTrue;
   errCode = errNone;
+  repaired = gFalse;
   size = 0;
   last = -1;
   entries = NULL;
+  lastStartxrefPos = 0;
+  xrefTablePos = NULL;
+  xrefTablePosLen = 0;
   streamEnds = NULL;
   streamEndsLen = 0;
   for (i = 0; i < objStrCacheSize; ++i) {
     objStrs[i] = NULL;
+    objStrLastUse[i] = 0;
   }
+  objStrCacheLength = 0;
+  objStrTime = 0;
 
   encrypted = gFalse;
   permFlags = defPermFlags;
@@ -307,6 +317,11 @@ XRef::XRef(BaseStream *strA, GBool repair) {
   for (i = 0; i < xrefCacheSize; ++i) {
     cache[i].num = -1;
   }
+
+#if MULTITHREADED
+  gInitMutex(&objStrsMutex);
+  gInitMutex(&cacheMutex);
+#endif
 
   str = strA;
   start = str->getStart();
@@ -317,6 +332,7 @@ XRef::XRef(BaseStream *strA, GBool repair) {
       errCode = errDamaged;
       return;
     }
+    repaired = gTrue;
 
   // if the 'repair' flag is not set, read the xref table
   } else {
@@ -331,7 +347,13 @@ XRef::XRef(BaseStream *strA, GBool repair) {
 
     // read the xref table
     posSet = new XRefPosSet();
-    while (readXRef(&pos, posSet)) ;
+    while (readXRef(&pos, posSet, gFalse)) ;
+    xrefTablePosLen = posSet->getLength();
+    xrefTablePos = (GFileOffset *)gmallocn(xrefTablePosLen,
+					   sizeof(GFileOffset));
+    for (i = 0; i < xrefTablePosLen; ++i)  {
+      xrefTablePos[i] = posSet->get(i);
+    }
     delete posSet;
     if (!ok) {
       errCode = errDamaged;
@@ -368,6 +390,9 @@ XRef::~XRef() {
   }
   gfree(entries);
   trailerDict.free();
+  if (xrefTablePos) {
+    gfree(xrefTablePos);
+  }
   if (streamEnds) {
     gfree(streamEnds);
   }
@@ -376,6 +401,10 @@ XRef::~XRef() {
       delete objStrs[i];
     }
   }
+#if MULTITHREADED
+  gDestroyMutex(&objStrsMutex);
+  gDestroyMutex(&cacheMutex);
+#endif
 }
 
 // Read the 'startxref' position.
@@ -400,18 +429,28 @@ GFileOffset XRef::getStartXref() {
   }
   for (p = &buf[i+9]; isspace(*p & 0xff); ++p) ;
   lastXRefPos = strToFileOffset(p);
+  lastStartxrefPos = str->getPos() - n + i;
 
   return lastXRefPos;
 }
 
 // Read one xref table section.  Also reads the associated trailer
-// dictionary, and returns the prev pointer (if any).
-GBool XRef::readXRef(GFileOffset *pos, XRefPosSet *posSet) {
+// dictionary, and returns the prev pointer (if any).  The [hybrid]
+// flag is true when following the XRefStm link in a hybrid-reference
+// file.
+GBool XRef::readXRef(GFileOffset *pos, XRefPosSet *posSet, GBool hybrid) {
   Parser *parser;
   Object obj;
   GBool more;
   char buf[100];
   int n, i;
+
+  // check for a loop in the xref tables
+  if (posSet->check(*pos)) {
+    error(errSyntaxWarning, -1, "Infinite loop in xref table");
+    return gFalse;
+  }
+  posSet->add(*pos);
 
   // the xref data should either be "xref ..." (for an xref table) or
   // "nn gg obj << ... >> stream ..." (for an xref stream); possibly
@@ -421,48 +460,49 @@ GBool XRef::readXRef(GFileOffset *pos, XRefPosSet *posSet) {
   for (i = 0; i < n && Lexer::isSpace(buf[i]); ++i) ;
 
   // parse an old-style xref table
-  if (i + 4 < n &&
+  if (!hybrid &&
+      i + 4 < n &&
       buf[i] == 'x' && buf[i+1] == 'r' && buf[i+2] == 'e' && buf[i+3] == 'f' &&
       Lexer::isSpace(buf[i+4])) {
     more = readXRefTable(pos, i + 5, posSet);
 
   // parse an xref stream
-  } else if (i < n && buf[i] >= '0' && buf[i] <= '9') {
+  } else {
     obj.initNull();
     parser = new Parser(NULL,
 	       new Lexer(NULL,
 		 str->makeSubStream(start + *pos, gFalse, 0, &obj)),
 	       gTrue);
     if (!parser->getObj(&obj, gTrue)->isInt()) {
-      goto err2;
+      goto err;
     }
     obj.free();
     if (!parser->getObj(&obj, gTrue)->isInt()) {
-      goto err2;
+      goto err;
     }
     obj.free();
     if (!parser->getObj(&obj, gTrue)->isCmd("obj")) {
-      goto err2;
+      goto err;
     }
     obj.free();
     if (!parser->getObj(&obj)->isStream()) {
-      goto err2;
+      goto err;
     }
     more = readXRefStream(obj.getStream(), pos);
     obj.free();
     delete parser;
-
-  } else {
-    goto err1;
   }
 
   return more;
 
- err2:
+ err:
   obj.free();
   delete parser;
- err1:
-  ok = gFalse;
+  if (hybrid) {
+    error(errSyntaxError, -1, "Invalid XRefStm link in trailer");
+  } else {
+    ok = gFalse;
+  }
   return gFalse;
 }
 
@@ -473,13 +513,7 @@ GBool XRef::readXRefTable(GFileOffset *pos, int offset, XRefPosSet *posSet) {
   char buf[6];
   GFileOffset off, pos2;
   GBool more;
-  int first, n, newSize, gen, i, c;
-
-  if (posSet->check(*pos)) {
-    error(errSyntaxWarning, -1, "Infinite loop in xref table");
-    return gFalse;
-  }
-  posSet->add(*pos);
+  int first, n, digit, newSize, gen, i, c;
 
   str->setPos(start + *pos + offset);
 
@@ -498,7 +532,11 @@ GBool XRef::readXRefTable(GFileOffset *pos, int offset, XRefPosSet *posSet) {
     }
     first = 0;
     do {
-      first = (first * 10) + (c - '0');
+      digit = c - '0';
+      if (first > (INT_MAX - digit) / 10) {
+	goto err1;
+      }
+      first = (first * 10) + digit;
       c = str->getChar();
     } while (c >= '0' && c <= '9');
     if (!Lexer::isSpace(c)) {
@@ -509,22 +547,27 @@ GBool XRef::readXRefTable(GFileOffset *pos, int offset, XRefPosSet *posSet) {
     } while (Lexer::isSpace(c));
     n = 0;
     do {
-      n = (n * 10) + (c - '0');
+      digit = c - '0';
+      if (n > (INT_MAX - digit) / 10) {
+	goto err1;
+      }
+      n = (n * 10) + digit;
       c = str->getChar();
     } while (c >= '0' && c <= '9');
     if (!Lexer::isSpace(c)) {
       goto err1;
     }
-    if (first < 0 || n < 0 || first > INT_MAX - n) {
+    if (first > INT_MAX - n) {
       goto err1;
     }
     if (first + n > size) {
-      for (newSize = size ? 2 * size : 1024;
-	   first + n > newSize && newSize > 0;
-	   newSize <<= 1) ;
-      if (newSize < 0) {
-	goto err1;
-      }
+      newSize = size ? size : 512;
+      do {
+	if (newSize > INT_MAX / 2) {
+	  goto err1;
+	}
+	newSize <<= 1;
+      } while (first + n > newSize);
       entries = (XRefEntry *)greallocn(entries, newSize, sizeof(XRefEntry));
       for (i = size; i < newSize; ++i) {
 	entries[i].offset = (GFileOffset)-1;
@@ -628,9 +671,10 @@ GBool XRef::readXRefTable(GFileOffset *pos, int offset, XRefPosSet *posSet) {
   //~ this can be a 64-bit int (?)
   if (obj.getDict()->lookup("XRefStm", &obj2)->isInt()) {
     pos2 = (GFileOffset)(Guint)obj2.getInt();
-    readXRef(&pos2, posSet);
+    readXRef(&pos2, posSet, gTrue);
     if (!ok) {
       obj2.free();
+      obj.free();
       goto err1;
     }
   }
@@ -683,9 +727,9 @@ GBool XRef::readXRefStream(Stream *xrefStr, GFileOffset *pos) {
     obj2.free();
   }
   obj.free();
-  if (w[0] < 0 || w[0] > 4 ||
-      w[1] < 0 || w[1] > (int)sizeof(GFileOffset) ||
-      w[2] < 0 || w[2] > 4) {
+  if (w[0] < 0 || w[0] > 8 ||
+      w[1] < 0 || w[1] > 8 ||
+      w[2] < 0 || w[2] > 8) {
     goto err0;
   }
 
@@ -742,8 +786,8 @@ GBool XRef::readXRefStream(Stream *xrefStr, GFileOffset *pos) {
 }
 
 GBool XRef::readXRefStreamSection(Stream *xrefStr, int *w, int first, int n) {
-  GFileOffset offset;
-  int type, gen, c, newSize, i, j;
+  long long type, gen, offset;
+  int c, newSize, i, j;
 
   if (first + n < 0) {
     return gFalse;
@@ -779,27 +823,34 @@ GBool XRef::readXRefStreamSection(Stream *xrefStr, int *w, int first, int n) {
       }
       offset = (offset << 8) + c;
     }
+    if (offset < 0 || offset > GFILEOFFSET_MAX) {
+      return gFalse;
+    }
     for (gen = 0, j = 0; j < w[2]; ++j) {
       if ((c = xrefStr->getChar()) == EOF) {
 	return gFalse;
       }
       gen = (gen << 8) + c;
     }
+    // some PDF generators include a free entry with gen=0xffffffff
+    if ((gen < 0 || gen > INT_MAX) && type != 0) {
+      return gFalse;
+    }
     if (entries[i].offset == (GFileOffset)-1) {
       switch (type) {
       case 0:
-	entries[i].offset = offset;
-	entries[i].gen = gen;
+	entries[i].offset = (GFileOffset)offset;
+	entries[i].gen = (int)gen;
 	entries[i].type = xrefEntryFree;
 	break;
       case 1:
-	entries[i].offset = offset;
-	entries[i].gen = gen;
+	entries[i].offset = (GFileOffset)offset;
+	entries[i].gen = (int)gen;
 	entries[i].type = xrefEntryUncompressed;
 	break;
       case 2:
-	entries[i].offset = offset;
-	entries[i].gen = gen;
+	entries[i].offset = (GFileOffset)offset;
+	entries[i].gen = (int)gen;
 	entries[i].type = xrefEntryCompressed;
 	break;
       default:
@@ -816,125 +867,277 @@ GBool XRef::readXRefStreamSection(Stream *xrefStr, int *w, int first, int n) {
 
 // Attempt to construct an xref table for a damaged file.
 GBool XRef::constructXRef() {
-  Parser *parser;
-  Object newTrailerDict, obj;
-  char buf[256];
-  GFileOffset pos;
-  int num, gen;
-  int newSize;
-  int streamEndsSize;
-  char *p;
-  int i;
-  GBool gotRoot;
-
-  gfree(entries);
-  size = 0;
-  entries = NULL;
-
-  gotRoot = gFalse;
-  streamEndsLen = streamEndsSize = 0;
-
+  int *streamObjNums = NULL;
+  int streamObjNumsLen = 0;
+  int streamObjNumsSize = 0;
+  int lastObjNum = -1;
+  rootNum = -1;
+  int streamEndsSize = 0;
+  streamEndsLen = 0;
+  char buf[4096 + 1];
   str->reset();
+  GFileOffset bufPos = start;
+  char *p = buf;
+  char *end = buf;
+  GBool startOfLine = gTrue;
+  GBool space = gTrue;
+  GBool eof = gFalse;
   while (1) {
-    pos = str->getPos();
-    if (!str->getLine(buf, 256)) {
+    if (end - p < 256 && !eof) {
+      memcpy(buf, p, end - p);
+      bufPos += p - buf;
+      p = buf + (end - p);
+      int n = (int)(buf + 4096 - p);
+      int m = str->getBlock(p, n);
+      end = p + m;
+      *end = '\0';
+      p = buf;
+      eof = m < n;
+    }
+    if (p == end && eof) {
       break;
     }
-    p = buf;
-
-    // skip whitespace
-    while (*p && Lexer::isSpace(*p & 0xff)) ++p;
-
-    // got trailer dictionary
-    if (!strncmp(p, "trailer", 7)) {
-      obj.initNull();
-      parser = new Parser(NULL,
-		 new Lexer(NULL,
-		   str->makeSubStream(pos + 7, gFalse, 0, &obj)),
-		 gFalse);
-      parser->getObj(&newTrailerDict);
-      if (newTrailerDict.isDict()) {
-	newTrailerDict.dictLookupNF("Root", &obj);
-	if (obj.isRef()) {
-	  rootNum = obj.getRefNum();
-	  rootGen = obj.getRefGen();
-	  if (!trailerDict.isNone()) {
-	    trailerDict.free();
-	  }
-	  newTrailerDict.copy(&trailerDict);
-	  gotRoot = gTrue;
-	}
-	obj.free();
-      }
-      newTrailerDict.free();
-      delete parser;
-
-    // look for object
-    } else if (isdigit(*p & 0xff)) {
-      num = atoi(p);
-      if (num > 0) {
-	do {
-	  ++p;
-	} while (*p && isdigit(*p & 0xff));
-	if (isspace(*p & 0xff)) {
-	  do {
-	    ++p;
-	  } while (*p && isspace(*p & 0xff));
-	  if (isdigit(*p & 0xff)) {
-	    gen = atoi(p);
-	    do {
-	      ++p;
-	    } while (*p && isdigit(*p & 0xff));
-	    if (isspace(*p & 0xff)) {
-	      do {
-		++p;
-	      } while (*p && isspace(*p & 0xff));
-	      if (!strncmp(p, "obj", 3)) {
-		if (num >= size) {
-		  newSize = (num + 1 + 255) & ~255;
-		  if (newSize < 0) {
-		    error(errSyntaxError, -1, "Bad object number");
-		    return gFalse;
-		  }
-		  entries = (XRefEntry *)
-		      greallocn(entries, newSize, sizeof(XRefEntry));
-		  for (i = size; i < newSize; ++i) {
-		    entries[i].offset = (GFileOffset)-1;
-		    entries[i].type = xrefEntryFree;
-		  }
-		  size = newSize;
-		}
-		if (entries[num].type == xrefEntryFree ||
-		    gen >= entries[num].gen) {
-		  entries[num].offset = pos - start;
-		  entries[num].gen = gen;
-		  entries[num].type = xrefEntryUncompressed;
-		  if (num > last) {
-		    last = num;
-		  }
-		}
-	      }
-	    }
-	  }
-	}
-      }
-
-    } else if (!strncmp(p, "endstream", 9)) {
+    if (startOfLine && !strncmp(p, "trailer", 7)) {
+      constructTrailerDict((GFileOffset)(bufPos + (p + 7 - buf)));
+      p += 7;
+      startOfLine = gFalse;
+      space = gFalse;
+    } else if (startOfLine && !strncmp(p, "endstream", 9)) {
       if (streamEndsLen == streamEndsSize) {
 	streamEndsSize += 64;
 	streamEnds = (GFileOffset *)greallocn(streamEnds, streamEndsSize,
 					      sizeof(GFileOffset));
       }
-      streamEnds[streamEndsLen++] = pos;
+      streamEnds[streamEndsLen++] = (GFileOffset)(bufPos + (p - buf));
+      p += 9;
+      startOfLine = gFalse;
+      space = gFalse;
+    } else if (space && *p >= '0' && *p <= '9') {
+      p = constructObjectEntry(p, (GFileOffset)(bufPos + (p - buf)),
+			       &lastObjNum);
+      startOfLine = gFalse;
+      space = gFalse;
+    } else if (p[0] == '>' && p[1] == '>') {
+      p += 2;
+      startOfLine = gFalse;
+      space = gFalse;
+      // skip any PDF whitespace except for '\0'
+      while (*p == '\t' || *p == '\n' || *p == '\x0c' ||
+	     *p == '\r' || *p == ' ') {
+	if (*p == '\n' || *p == '\r') {
+	  startOfLine = gTrue;
+	}
+	space = gTrue;
+	++p;
+      }
+      if (!strncmp(p, "stream", 6)) {
+	if (lastObjNum >= 0) {
+	  if (streamObjNumsLen == streamObjNumsSize) {
+	    streamObjNumsSize += 64;
+	    streamObjNums = (int *)greallocn(streamObjNums, streamObjNumsSize,
+					     sizeof(int));
+	  }
+	  streamObjNums[streamObjNumsLen++] = lastObjNum;
+	}
+	p += 6;
+	startOfLine = gFalse;
+	space = gFalse;
+      }
+    } else {
+      if (*p == '\n' || *p == '\r') {
+	startOfLine = gTrue;
+	space = gTrue;
+      } else if (Lexer::isSpace(*p & 0xff)) {
+	space = gTrue;
+      } else {
+	startOfLine = gFalse;
+	space = gFalse;
+      }
+      ++p;
     }
   }
 
-  if (gotRoot) {
-    return gTrue;
+  // read each stream object, check for xref or object stream
+  for (int i = 0; i < streamObjNumsLen; ++i) {
+    Object obj;
+    fetch(streamObjNums[i], entries[streamObjNums[i]].gen, &obj);
+    if (obj.isStream()) {
+      Dict *dict = obj.streamGetDict();
+      Object type;
+      dict->lookup("Type", &type);
+      if (type.isName("XRef")) {
+	saveTrailerDict(dict, gTrue);
+      } else if (type.isName("ObjStm")) {
+	constructObjectStreamEntries(&obj, streamObjNums[i]);
+      }
+      type.free();
+    }
+    obj.free();
   }
 
-  error(errSyntaxError, -1, "Couldn't find trailer dictionary");
-  return gFalse;
+  gfree(streamObjNums);
+
+  // if the file is encrypted, then any objects fetched here will be
+  // incorrect (because decryption is not yet enabled), so clear the
+  // cache to avoid that problem
+  for (int i = 0; i < xrefCacheSize; ++i) {
+    if (cache[i].num >= 0) {
+      cache[i].obj.free();
+      cache[i].num = -1;
+    }
+  }
+
+  if (rootNum < 0) {
+    error(errSyntaxError, -1, "Couldn't find trailer dictionary");
+    return gFalse;
+  }
+  return gTrue;
+}
+
+// Attempt to construct a trailer dict at [pos] in the stream.
+void XRef::constructTrailerDict(GFileOffset pos) {
+  Object newTrailerDict, obj;
+  obj.initNull();
+  Parser *parser =
+      new Parser(NULL,
+		 new Lexer(NULL,
+			   str->makeSubStream(pos, gFalse, 0, &obj)),
+		 gFalse);
+  parser->getObj(&newTrailerDict);
+  if (newTrailerDict.isDict()) {
+    saveTrailerDict(newTrailerDict.getDict(), gFalse);
+  }
+  newTrailerDict.free();
+  delete parser;
+}
+
+// If [dict] "looks like" a trailer dict (i.e., has a Root entry),
+// save it as the trailer dict.
+void XRef::saveTrailerDict(Dict *dict, GBool isXRefStream) {
+  Object obj;
+  dict->lookupNF("Root", &obj);
+  if (obj.isRef()) {
+    int newRootNum = obj.getRefNum();
+    // the xref stream scanning code runs after all objects are found,
+    // so we can check for a valid root object number at that point
+    if (!isXRefStream || newRootNum <= last) {
+      rootNum = newRootNum;
+      rootGen = obj.getRefGen();
+      if (!trailerDict.isNone()) {
+	trailerDict.free();
+      }
+      trailerDict.initDict(dict);
+    }
+  }
+  obj.free();
+}
+
+// Look for an object header ("nnn ggg obj") at [p].  The first
+// character at *[p] is a digit.  [pos] is the position of *[p].
+char *XRef::constructObjectEntry(char *p, GFileOffset pos, int *objNum) {
+  // we look for non-end-of-line space characters here, to deal with
+  // situations like:
+  //    nnn          <-- garbage digits on a line
+  //    nnn nnn obj  <-- actual object
+  // and we also ignore '\0' (because it's used to terminate the
+  // buffer in this damage-scanning code)
+  int num = 0;
+  do {
+    num = (num * 10) + (*p - '0');
+    ++p;
+  } while (*p >= '0' && *p <= '9' && num < 100000000);
+  if (*p != '\t' && *p != '\x0c' && *p != ' ') {
+    return p;
+  }
+  do {
+    ++p;
+  } while (*p == '\t' || *p == '\x0c' || *p == ' ');
+  if (!(*p >= '0' && *p <= '9')) {
+    return p;
+  }
+  int gen = 0;
+  do {
+    gen = (gen * 10) + (*p - '0');
+    ++p;
+  } while (*p >= '0' && *p <= '9' && gen < 100000000);
+  if (*p != '\t' && *p != '\x0c' && *p != ' ') {
+    return p;
+  }
+  do {
+    ++p;
+  } while (*p == '\t' || *p == '\x0c' || *p == ' ');
+  if (strncmp(p, "obj", 3)) {
+    return p;
+  }
+
+  if (constructXRefEntry(num, gen, pos - start, xrefEntryUncompressed)) {
+    *objNum = num;
+  }
+
+  return p;
+}
+
+// Read the header from an object stream, and add xref entries for all
+// of its objects.
+void XRef::constructObjectStreamEntries(Object *objStr, int objStrObjNum) {
+  Object obj1, obj2;
+
+  // get the object count
+  if (!objStr->streamGetDict()->lookup("N", &obj1)->isInt()) {
+    obj1.free();
+    return;
+  }
+  int nObjects = obj1.getInt();
+  obj1.free();
+  if (nObjects <= 0 || nObjects > 1000000) {
+    return;
+  }
+
+  // parse the header: object numbers and offsets
+  Parser *parser = new Parser(NULL,
+			      new Lexer(NULL, objStr->getStream()->copy()),
+			      gFalse);
+  for (int i = 0; i < nObjects; ++i) {
+    parser->getObj(&obj1, gTrue);
+    parser->getObj(&obj2, gTrue);
+    if (obj1.isInt() && obj2.isInt()) {
+      int num = obj1.getInt();
+      if (num >= 0 && num < 1000000) {
+	constructXRefEntry(num, i, objStrObjNum, xrefEntryCompressed);
+      }
+    }
+    obj2.free();
+    obj1.free();
+  }
+  delete parser;
+}
+
+GBool XRef::constructXRefEntry(int num, int gen, GFileOffset pos,
+			       XRefEntryType type) {
+  if (num >= size) {
+    int newSize = (num + 1 + 255) & ~255;
+    if (newSize < 0) {
+      return gFalse;
+    }
+    entries = (XRefEntry *)greallocn(entries, newSize, sizeof(XRefEntry));
+    for (int i = size; i < newSize; ++i) {
+      entries[i].offset = (GFileOffset)-1;
+      entries[i].type = xrefEntryFree;
+    }
+    size = newSize;
+  }
+
+  if (entries[num].type == xrefEntryFree ||
+      gen >= entries[num].gen) {
+    entries[num].offset = pos;
+    entries[num].gen = gen;
+    entries[num].type = type;
+    if (num > last) {
+      last = num;
+    }
+  }
+
+  return gTrue;
 }
 
 void XRef::setEncryption(int permFlagsA, GBool ownerPasswordOkA,
@@ -957,6 +1160,20 @@ void XRef::setEncryption(int permFlagsA, GBool ownerPasswordOkA,
   encAlgorithm = encAlgorithmA;
 }
 
+GBool XRef::getEncryption(int *permFlagsA, GBool *ownerPasswordOkA,
+			  int *keyLengthA, int *encVersionA,
+			  CryptAlgorithm *encAlgorithmA) {
+  if (!encrypted) {
+    return gFalse;
+  }
+  *permFlagsA = permFlags;
+  *ownerPasswordOkA = ownerPasswordOk;
+  *keyLengthA = keyLength;
+  *encVersionA = encVersion;
+  *encAlgorithmA = encAlgorithm;
+  return gTrue;
+}
+
 GBool XRef::okToPrint(GBool ignoreOwnerPW) {
   return (!ignoreOwnerPW && ownerPasswordOk) || (permFlags & permPrint);
 }
@@ -966,7 +1183,7 @@ GBool XRef::okToChange(GBool ignoreOwnerPW) {
 }
 
 GBool XRef::okToCopy(GBool ignoreOwnerPW) {
-    return gTrue;
+  return (!ignoreOwnerPW && ownerPasswordOk) || (permFlags & permCopy);
 }
 
 GBool XRef::okToAddNotes(GBool ignoreOwnerPW) {
@@ -976,7 +1193,6 @@ GBool XRef::okToAddNotes(GBool ignoreOwnerPW) {
 Object *XRef::fetch(int num, int gen, Object *obj, int recursion) {
   XRefEntry *e;
   Parser *parser;
-  ObjectStream *objStr;
   Object obj1, obj2, obj3;
   XRefCacheEntry tmp;
   int i, j;
@@ -987,8 +1203,15 @@ Object *XRef::fetch(int num, int gen, Object *obj, int recursion) {
   }
 
   // check the cache
+#if MULTITHREADED
+  gLockMutex(&cacheMutex);
+#endif
   if (cache[0].num == num && cache[0].gen == gen) {
-    return cache[0].obj.copy(obj);
+    cache[0].obj.copy(obj);
+#if MULTITHREADED
+    gUnlockMutex(&cacheMutex);
+#endif
+    return obj;
   }
   for (i = 1; i < xrefCacheSize; ++i) {
     if (cache[i].num == num && cache[i].gen == gen) {
@@ -997,9 +1220,16 @@ Object *XRef::fetch(int num, int gen, Object *obj, int recursion) {
 	cache[j] = cache[j - 1];
       }
       cache[0] = tmp;
-      return cache[0].obj.copy(obj);
+      cache[0].obj.copy(obj);
+#if MULTITHREADED
+      gUnlockMutex(&cacheMutex);
+#endif
+      return obj;
     }
   }
+#if MULTITHREADED
+  gUnlockMutex(&cacheMutex);
+#endif
 
   e = &entries[num];
   switch (e->type) {
@@ -1044,10 +1274,9 @@ Object *XRef::fetch(int num, int gen, Object *obj, int recursion) {
       error(errSyntaxError, -1, "Invalid object stream");
       goto err;
     }
-    if (!(objStr = getObjectStream((int)e->offset))) {
+    if (!getObjectStreamObject((int)e->offset, e->gen, num, obj, recursion)) {
       goto err;
     }
-    objStr->getObject(e->gen, num, obj);
     break;
 
   default:
@@ -1056,6 +1285,9 @@ Object *XRef::fetch(int num, int gen, Object *obj, int recursion) {
 
   // put the new object in the cache, throwing away the oldest object
   // currently in the cache
+#if MULTITHREADED
+  gLockMutex(&cacheMutex);
+#endif
   if (cache[xrefCacheSize - 1].num >= 0) {
     cache[xrefCacheSize - 1].obj.free();
   }
@@ -1065,6 +1297,9 @@ Object *XRef::fetch(int num, int gen, Object *obj, int recursion) {
   cache[0].num = num;
   cache[0].gen = gen;
   obj->copy(&cache[0].obj);
+#if MULTITHREADED
+  gUnlockMutex(&cacheMutex);
+#endif
 
   return obj;
 
@@ -1072,41 +1307,106 @@ Object *XRef::fetch(int num, int gen, Object *obj, int recursion) {
   return obj->initNull();
 }
 
-ObjectStream *XRef::getObjectStream(int objStrNum) {
-  ObjectStream *objStr;
-  int i, j;
+GBool XRef::getObjectStreamObject(int objStrNum, int objIdx,
+				  int objNum, Object *obj, int recursion) {
+  if (recursion >= objectRecursionLimit) {
+    return gFalse;
+  }
 
+  // check for a cached ObjectStream
+#if MULTITHREADED
+  gLockMutex(&objStrsMutex);
+#endif
+  ObjectStream *objStr = getObjectStreamFromCache(objStrNum);
+  GBool found = gFalse;
+  if (objStr) {
+    objStr->getObject(objIdx, objNum, obj);
+    cleanObjectStreamCache();
+    found = gTrue;
+  }
+#if MULTITHREADED
+  gUnlockMutex(&objStrsMutex);
+#endif
+  if (found) {
+    return gTrue;
+  }
+
+  // load a new ObjectStream
+  objStr = new ObjectStream(this, objStrNum, recursion + 1);
+  if (!objStr->isOk()) {
+    delete objStr;
+    return gFalse;
+  }
+  objStr->getObject(objIdx, objNum, obj);
+#if MULTITHREADED
+  gLockMutex(&objStrsMutex);
+#endif
+  addObjectStreamToCache(objStr);
+  cleanObjectStreamCache();
+#if MULTITHREADED
+  gUnlockMutex(&objStrsMutex);
+#endif
+  return gTrue;
+}
+
+// NB: objStrsMutex must be locked when calling this function.
+ObjectStream *XRef::getObjectStreamFromCache(int objStrNum) {
   // check the MRU entry in the cache
   if (objStrs[0] && objStrs[0]->getObjStrNum() == objStrNum) {
-    return objStrs[0];
+    ObjectStream *objStr = objStrs[0];
+    objStrLastUse[0] = objStrTime++;
+    return objStr;
   }
 
   // check the rest of the cache
-  for (i = 1; i < objStrCacheSize; ++i) {
+  for (int i = 1; i < objStrCacheLength; ++i) {
     if (objStrs[i] && objStrs[i]->getObjStrNum() == objStrNum) {
-      objStr = objStrs[i];
-      for (j = i; j > 0; --j) {
+      ObjectStream *objStr = objStrs[i];
+      for (int j = i; j > 0; --j) {
 	objStrs[j] = objStrs[j - 1];
+	objStrLastUse[j] = objStrLastUse[j - 1];
       }
       objStrs[0] = objStr;
+      objStrLastUse[0] = objStrTime++;
       return objStr;
     }
   }
 
-  // load a new ObjectStream
-  objStr = new ObjectStream(this, objStrNum);
-  if (!objStr->isOk()) {
-    delete objStr;
-    return NULL;
-  }
-  if (objStrs[objStrCacheSize - 1]) {
+  return NULL;
+}
+
+// NB: objStrsMutex must be locked when calling this function.
+void XRef::addObjectStreamToCache(ObjectStream *objStr) {
+  // add to the cache
+  if (objStrCacheLength == objStrCacheSize) {
     delete objStrs[objStrCacheSize - 1];
+    --objStrCacheLength;
   }
-  for (j = objStrCacheSize - 1; j > 0; --j) {
+  for (int j = objStrCacheLength; j > 0; --j) {
     objStrs[j] = objStrs[j - 1];
+    objStrLastUse[j] = objStrLastUse[j - 1];
   }
+  ++objStrCacheLength;
   objStrs[0] = objStr;
-  return objStr;
+  objStrLastUse[0] = objStrTime++;
+}
+
+// If the oldest (least recently used) entry in the object stream
+// cache is more than objStrCacheTimeout accesses old (hasn't been
+// used in the last objStrCacheTimeout accesses), eject it from the
+// cache.
+// NB: objStrsMutex must be locked when calling this function.
+void XRef::cleanObjectStreamCache() {
+  // NB: objStrTime and objStrLastUse[] are unsigned ints, so the
+  // mod-2^32 arithmetic makes the subtraction work out, even if the
+  // time wraps around.
+  if (objStrCacheLength > 1 &&
+      objStrTime - objStrLastUse[objStrCacheLength - 1]
+        > objStrCacheTimeout) {
+    delete objStrs[objStrCacheLength - 1];
+    objStrs[objStrCacheLength - 1] = NULL;
+    --objStrCacheLength;
+  }
 }
 
 Object *XRef::getDocInfo(Object *obj) {

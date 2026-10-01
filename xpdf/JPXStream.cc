@@ -8,18 +8,14 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <limits.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "Error.h"
 #include "JArithmeticDecoder.h"
 #include "JPXStream.h"
 
 //~ to do:
-//  - precincts
 //  - ROI
 //  - progression order changes
 //  - packed packet headers
@@ -27,7 +23,6 @@
 //  - make sure all needed JP2/JPX subboxes are parsed (readBoxes)
 //  - can we assume that QCC segments must come after the QCD segment?
 //  - handle tilePartToEOC in readTilePartData
-//  - progression orders 2, 3, and 4
 //  - in coefficient decoding (readCodeBlockData):
 //    - selective arithmetic coding bypass
 //      (this also affects reading the cb->dataLen array)
@@ -229,8 +224,9 @@ JPXCover jpxCover(150);
 JPXStream::JPXStream(Stream *strA):
   FilterStream(strA)
 {
-  bufStr = new BufStream(str, 2);
+  bufStr = new BufStream(str, 3);
 
+  decoded = gFalse;
   nComps = 0;
   bpc = NULL;
   width = height = 0;
@@ -264,17 +260,14 @@ JPXStream::~JPXStream() {
   delete bufStr;
 }
 
+Stream *JPXStream::copy() {
+  return new JPXStream(str->copy());
+}
+
 void JPXStream::reset() {
+  img.ySize = 0;
   bufStr->reset();
-  if (readBoxes() == jpxDecodeFatalError) {
-    // readBoxes reported an error, so we go immediately to EOF
-    curY = img.ySizeR;
-  } else {
-    curY = img.yOffsetR;
-  }
-  curX = img.xOffsetR;
-  curComp = 0;
-  readBufLen = 0;
+  decoded = gFalse;
 }
 
 void JPXStream::close() {
@@ -319,7 +312,7 @@ void JPXStream::close() {
 	    for (r = 0; r <= tileComp->nDecompLevels; ++r) {
 	      resLevel = &tileComp->resLevels[r];
 	      if (resLevel->precincts) {
-		for (pre = 0; pre < 1; ++pre) {
+		for (pre = 0; pre < resLevel->nPrecincts; ++pre) {
 		  precinct = &resLevel->precincts[pre];
 		  if (precinct->subbands) {
 		    for (sb = 0; sb < (Guint)(r == 0 ? 1 : 3); ++sb) {
@@ -344,13 +337,13 @@ void JPXStream::close() {
 		    gfree(precinct->subbands);
 		  }
 		}
-		gfree(img.tiles[i].tileComps[comp].resLevels[r].precincts);
+		gfree(resLevel->precincts);
 	      }
 	    }
-	    gfree(img.tiles[i].tileComps[comp].resLevels);
+	    gfree(tileComp->resLevels);
 	  }
 	}
-	gfree(img.tiles[i].tileComps);
+	gfree(tile->tileComps);
       }
     }
     gfree(img.tiles);
@@ -359,9 +352,25 @@ void JPXStream::close() {
   bufStr->close();
 }
 
+void JPXStream::decodeImage() {
+  if (readBoxes() == jpxDecodeFatalError) {
+    // readBoxes reported an error, so we go immediately to EOF
+    curY = img.ySize >> reduction;
+  } else {
+    curY = img.yOffsetR;
+  }
+  curX = img.xOffsetR;
+  curComp = 0;
+  readBufLen = 0;
+  decoded = gTrue;
+}
+
 int JPXStream::getChar() {
   int c;
 
+  if (!decoded) {
+    decodeImage();
+  }
   if (readBufLen < 8) {
     fillReadBuf();
   }
@@ -383,6 +392,9 @@ int JPXStream::getChar() {
 int JPXStream::lookChar() {
   int c;
 
+  if (!decoded) {
+    decodeImage();
+  }
   if (readBufLen < 8) {
     fillReadBuf();
   }
@@ -405,18 +417,29 @@ void JPXStream::fillReadBuf() {
   GBool eol;
 
   do {
-    if (curY >= img.ySizeR) {
+    if (curY >= (img.ySize >> reduction)) {
       return;
     }
-    tileIdx = ((curY - img.yTileOffsetR) / img.yTileSizeR) * img.nXTiles
-              + (curX - img.xTileOffsetR) / img.xTileSizeR;
+    tileIdx = (((curY << reduction) - img.yTileOffset) / img.yTileSize)
+                * img.nXTiles
+              + ((curX << reduction) - img.xTileOffset) / img.xTileSize;
 #if 1 //~ ignore the palette, assume the PDF ColorSpace object is valid
     tileComp = &img.tiles[tileIdx].tileComps[curComp];
 #else
     tileComp = &img.tiles[tileIdx].tileComps[havePalette ? 0 : curComp];
 #endif
-    tx = jpxCeilDiv((curX - img.xTileOffsetR) % img.xTileSizeR, tileComp->hSep);
-    ty = jpxCeilDiv((curY - img.yTileOffsetR) % img.yTileSizeR, tileComp->vSep);
+    tx = jpxFloorDiv(curX, tileComp->hSep);
+    if (tx < tileComp->x0r) {
+      tx = 0;
+    } else {
+      tx -= tileComp->x0r;
+    }
+    ty = jpxFloorDiv(curY, tileComp->vSep);
+    if (ty < tileComp->y0r) {
+      ty  = 0;
+    } else {
+      ty -= tileComp->y0r;
+    }
     pix = (int)tileComp->data[ty * tileComp->w + tx];
     pixBits = tileComp->prec;
     eol = gFalse;
@@ -434,7 +457,7 @@ void JPXStream::fillReadBuf() {
     if (++curComp == (Guint)(havePalette ? palette.nComps : img.nComps)) {
 #endif
       curComp = 0;
-      if (++curX == img.xSizeR) {
+      if (++curX == (img.xSize >> reduction)) {
 	curX = img.xOffsetR;
 	++curY;
 	eol = gTrue;
@@ -453,7 +476,8 @@ void JPXStream::fillReadBuf() {
   } while (readBufLen < 8);
 }
 
-GString *JPXStream::getPSFilter(int psLevel, const char *indent) {
+GString *JPXStream::getPSFilter(int psLevel, const char *indent,
+				GBool okToReadStream) {
   return NULL;
 }
 
@@ -582,11 +606,13 @@ void JPXStream::getImageParams2(int *bitsPerComponent,
 
 JPXDecodeResult JPXStream::readBoxes() {
   JPXDecodeResult result;
+  GBool haveCodestream;
   Guint boxType, boxLen, dataLen;
-  Guint bpc1, compression, unknownColorspace, ipr;
+  Guint w, h, n, bpc1, compression, unknownColorspace, ipr;
   Guint i, j;
 
   haveImgHdr = gFalse;
+  haveCodestream = gFalse;
 
   // check for a naked JPEG 2000 codestream (without the JP2/JPX
   // wrapper) -- this appears to be a violation of the PDF spec, but
@@ -620,9 +646,9 @@ JPXDecodeResult JPXStream::readBoxes() {
       break;
     case 0x69686472:		// image header
       cover(9);
-      if (!readULong(&height) ||
-	  !readULong(&width) ||
-	  !readUWord(&nComps) ||
+      if (!readULong(&h) ||
+	  !readULong(&w) ||
+	  !readUWord(&n) ||
 	  !readUByte(&bpc1) ||
 	  !readUByte(&compression) ||
 	  !readUByte(&unknownColorspace) ||
@@ -635,6 +661,9 @@ JPXDecodeResult JPXStream::readBoxes() {
 	      "Unknown compression type in JPX stream");
 	return jpxDecodeFatalError;
       }
+      height = h;
+      width = w;
+      nComps = n;
       bpc = (Guint *)gmallocn(nComps, sizeof(Guint));
       for (i = 0; i < nComps; ++i) {
 	bpc[i] = bpc1;
@@ -746,12 +775,13 @@ JPXDecodeResult JPXStream::readBoxes() {
       if ((result = readCodestream(dataLen)) != jpxDecodeOk) {
 	return result;
       }
+      haveCodestream = gTrue;
       break;
     default:
       cover(16);
       if (bufStr->discardChars(dataLen) != dataLen) {
 	error(errSyntaxError, getPos(), "Unexpected EOF in JPX stream");
-	return jpxDecodeFatalError;
+	return haveCodestream ? jpxDecodeNonFatalError : jpxDecodeFatalError;
       }
       break;
     }
@@ -887,7 +917,9 @@ JPXDecodeResult JPXStream::readCodestream(Guint len) {
   JPXTileComp *tileComp;
   int segType;
   GBool haveSIZ, haveCOD, haveQCD, haveSOT, ok;
-  Guint precinctSize, style;
+  Guint style, progOrder, nLayers, multiComp, nDecompLevels;
+  Guint codeBlockW, codeBlockH, codeBlockStyle, transform;
+  Guint precinctSize;
   Guint segLen, capabilities, comp, i, j, r;
 
   //----- main header
@@ -933,18 +965,15 @@ JPXDecodeResult JPXStream::readCodestream(Guint len) {
 	  img.xTileOffset > img.xOffset ||
 	  img.yTileOffset > img.yOffset ||
 	  img.xTileSize + img.xTileOffset <= img.xOffset ||
-	  img.yTileSize + img.yTileOffset <= img.yOffset) {
+	  img.yTileSize + img.yTileOffset <= img.yOffset ||
+	  img.nComps == 0) {
 	error(errSyntaxError, getPos(), "Error in JPX SIZ marker segment");
 	return jpxDecodeFatalError;
       }
-      img.xSizeR = img.xSize >> reduction;
-      img.ySizeR = img.ySize >> reduction;
-      img.xOffsetR = img.xOffset >> reduction;
-      img.yOffsetR = img.yOffset >> reduction;
-      img.xTileSizeR = img.xTileSize >> reduction;
-      img.yTileSizeR = img.yTileSize >> reduction;
-      img.xTileOffsetR = img.xTileOffset >> reduction;
-      img.yTileOffsetR = img.yTileOffset >> reduction;
+      img.xSizeR = jpxCeilDivPow2(img.xSize, reduction);
+      img.ySizeR = jpxCeilDivPow2(img.ySize, reduction);
+      img.xOffsetR = jpxCeilDivPow2(img.xOffset, reduction);
+      img.yOffsetR = jpxCeilDivPow2(img.yOffset, reduction);
       img.nXTiles = (img.xSize - img.xTileOffset + img.xTileSize - 1)
 	            / img.xTileSize;
       img.nYTiles = (img.ySize - img.yTileOffset + img.yTileSize - 1)
@@ -1002,68 +1031,56 @@ JPXDecodeResult JPXStream::readCodestream(Guint len) {
 	      "JPX COD marker segment before SIZ segment");
 	return jpxDecodeFatalError;
       }
-      if (!readUByte(&img.tiles[0].tileComps[0].style) ||
-	  !readUByte(&img.tiles[0].progOrder) ||
-	  !readUWord(&img.tiles[0].nLayers) ||
-	  !readUByte(&img.tiles[0].multiComp) ||
-	  !readUByte(&img.tiles[0].tileComps[0].nDecompLevels) ||
-	  !readUByte(&img.tiles[0].tileComps[0].codeBlockW) ||
-	  !readUByte(&img.tiles[0].tileComps[0].codeBlockH) ||
-	  !readUByte(&img.tiles[0].tileComps[0].codeBlockStyle) ||
-	  !readUByte(&img.tiles[0].tileComps[0].transform)) {
+      if (!readUByte(&style) ||
+	  !readUByte(&progOrder) ||
+	  !readUWord(&nLayers) ||
+	  !readUByte(&multiComp) ||
+	  !readUByte(&nDecompLevels) ||
+	  !readUByte(&codeBlockW) ||
+	  !readUByte(&codeBlockH) ||
+	  !readUByte(&codeBlockStyle) ||
+	  !readUByte(&transform)) {
 	error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
 	return jpxDecodeFatalError;
       }
-      if (img.tiles[0].tileComps[0].nDecompLevels > 32 ||
-	  img.tiles[0].tileComps[0].codeBlockW > 8 ||
-	  img.tiles[0].tileComps[0].codeBlockH > 8) {
+      if (nDecompLevels < 1 ||
+	  nDecompLevels > 31 ||
+	  codeBlockW > 8 ||
+	  codeBlockH > 8) {
 	error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
 	return jpxDecodeFatalError;
       }
-#if 1 //~ progression orders 2-4 are unimplemented
-      if (img.tiles[0].progOrder >= 2) {
-	error(errUnimplemented, -1,
-	      "JPX progression order {0:d} is unimplemented",
-	      img.tiles[0].progOrder);
-      }
-#endif
-      img.tiles[0].tileComps[0].codeBlockW += 2;
-      img.tiles[0].tileComps[0].codeBlockH += 2;
+      codeBlockW += 2;
+      codeBlockH += 2;
       for (i = 0; i < img.nXTiles * img.nYTiles; ++i) {
-	if (i != 0) {
-	  img.tiles[i].progOrder = img.tiles[0].progOrder;
-	  img.tiles[i].nLayers = img.tiles[0].nLayers;
-	  img.tiles[i].multiComp = img.tiles[0].multiComp;
-	}
+	img.tiles[i].progOrder = progOrder;
+	img.tiles[i].nLayers = nLayers;
+	img.tiles[i].multiComp = multiComp;
 	for (comp = 0; comp < img.nComps; ++comp) {
-	  if (!(i == 0 && comp == 0)) {
-	    img.tiles[i].tileComps[comp].style =
-	        img.tiles[0].tileComps[0].style;
-	    img.tiles[i].tileComps[comp].nDecompLevels =
-	        img.tiles[0].tileComps[0].nDecompLevels;
-	    img.tiles[i].tileComps[comp].codeBlockW =
-	        img.tiles[0].tileComps[0].codeBlockW;
-	    img.tiles[i].tileComps[comp].codeBlockH =
-	        img.tiles[0].tileComps[0].codeBlockH;
-	    img.tiles[i].tileComps[comp].codeBlockStyle =
-	        img.tiles[0].tileComps[0].codeBlockStyle;
-	    img.tiles[i].tileComps[comp].transform =
-	        img.tiles[0].tileComps[0].transform;
-	  }
+	  img.tiles[i].tileComps[comp].style = style;
+	  img.tiles[i].tileComps[comp].nDecompLevels = nDecompLevels;
+	  img.tiles[i].tileComps[comp].codeBlockW = codeBlockW;
+	  img.tiles[i].tileComps[comp].codeBlockH = codeBlockH;
+	  img.tiles[i].tileComps[comp].codeBlockStyle = codeBlockStyle;
+	  img.tiles[i].tileComps[comp].transform = transform;
 	  img.tiles[i].tileComps[comp].resLevels =
-	      (JPXResLevel *)gmallocn(
-		     (img.tiles[i].tileComps[comp].nDecompLevels + 1),
-		     sizeof(JPXResLevel));
-	  for (r = 0; r <= img.tiles[i].tileComps[comp].nDecompLevels; ++r) {
+	      (JPXResLevel *)gmallocn(nDecompLevels + 1, sizeof(JPXResLevel));
+	  for (r = 0; r <= nDecompLevels; ++r) {
 	    img.tiles[i].tileComps[comp].resLevels[r].precincts = NULL;
 	  }
 	}
       }
-      for (r = 0; r <= img.tiles[0].tileComps[0].nDecompLevels; ++r) {
-	if (img.tiles[0].tileComps[0].style & 0x01) {
+      for (r = 0; r <= nDecompLevels; ++r) {
+	if (style & 0x01) {
 	  cover(91);
 	  if (!readUByte(&precinctSize)) {
 	    error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
+	    return jpxDecodeFatalError;
+	  }
+	  if (r > 0 && ((precinctSize & 0x0f) == 0 ||
+			(precinctSize & 0xf0) == 0)) {
+	    error(errSyntaxError, getPos(),
+		  "Invalid precinct size in JPX COD marker segment");
 	    return jpxDecodeFatalError;
 	  }
 	  img.tiles[0].tileComps[0].resLevels[r].precinctWidth =
@@ -1078,7 +1095,7 @@ JPXDecodeResult JPXStream::readCodestream(Guint len) {
       for (i = 0; i < img.nXTiles * img.nYTiles; ++i) {
 	for (comp = 0; comp < img.nComps; ++comp) {
 	  if (!(i == 0 && comp == 0)) {
-	    for (r = 0; r <= img.tiles[i].tileComps[comp].nDecompLevels; ++r) {
+	    for (r = 0; r <= nDecompLevels; ++r) {
 	      img.tiles[i].tileComps[comp].resLevels[r].precinctWidth =
 		  img.tiles[0].tileComps[0].resLevels[r].precinctWidth;
 	      img.tiles[i].tileComps[comp].resLevels[r].precinctHeight =
@@ -1096,56 +1113,55 @@ JPXDecodeResult JPXStream::readCodestream(Guint len) {
 	      "JPX COC marker segment before COD segment");
 	return jpxDecodeFatalError;
       }
+      comp = 0;
       if ((img.nComps > 256 && !readUWord(&comp)) ||
 	  (img.nComps <= 256 && !readUByte(&comp)) ||
 	  comp >= img.nComps ||
 	  !readUByte(&style) ||
-	  !readUByte(&img.tiles[0].tileComps[comp].nDecompLevels) ||
-	  !readUByte(&img.tiles[0].tileComps[comp].codeBlockW) ||
-	  !readUByte(&img.tiles[0].tileComps[comp].codeBlockH) ||
-	  !readUByte(&img.tiles[0].tileComps[comp].codeBlockStyle) ||
-	  !readUByte(&img.tiles[0].tileComps[comp].transform)) {
+	  !readUByte(&nDecompLevels) ||
+	  !readUByte(&codeBlockW) ||
+	  !readUByte(&codeBlockH) ||
+	  !readUByte(&codeBlockStyle) ||
+	  !readUByte(&transform)) {
 	error(errSyntaxError, getPos(), "Error in JPX COC marker segment");
 	return jpxDecodeFatalError;
       }
-      if (img.tiles[0].tileComps[comp].nDecompLevels > 32 ||
-	  img.tiles[0].tileComps[comp].codeBlockW > 8 ||
-	  img.tiles[0].tileComps[comp].codeBlockH > 8) {
+      if (nDecompLevels < 1 ||
+	  nDecompLevels > 31 ||
+	  codeBlockW > 8 ||
+	  codeBlockH > 8) {
 	error(errSyntaxError, getPos(), "Error in JPX COC marker segment");
 	return jpxDecodeFatalError;
       }
-      img.tiles[0].tileComps[comp].style =
-	  (img.tiles[0].tileComps[comp].style & ~1) | (style & 1);
-      img.tiles[0].tileComps[comp].codeBlockW += 2;
-      img.tiles[0].tileComps[comp].codeBlockH += 2;
+      style = (img.tiles[0].tileComps[comp].style & ~1) | (style & 1);
+      codeBlockW += 2;
+      codeBlockH += 2;
       for (i = 0; i < img.nXTiles * img.nYTiles; ++i) {
-	if (i != 0) {
-	  img.tiles[i].tileComps[comp].style =
-	      img.tiles[0].tileComps[comp].style;
-	  img.tiles[i].tileComps[comp].nDecompLevels =
-	      img.tiles[0].tileComps[comp].nDecompLevels;
-	  img.tiles[i].tileComps[comp].codeBlockW =
-	      img.tiles[0].tileComps[comp].codeBlockW;
-	  img.tiles[i].tileComps[comp].codeBlockH =
-	      img.tiles[0].tileComps[comp].codeBlockH;
-	  img.tiles[i].tileComps[comp].codeBlockStyle =
-	      img.tiles[0].tileComps[comp].codeBlockStyle;
-	  img.tiles[i].tileComps[comp].transform =
-	      img.tiles[0].tileComps[comp].transform;
-	}
+	img.tiles[i].tileComps[comp].style = style;
+	img.tiles[i].tileComps[comp].nDecompLevels = nDecompLevels;
+	img.tiles[i].tileComps[comp].codeBlockW = codeBlockW;
+	img.tiles[i].tileComps[comp].codeBlockH = codeBlockH;
+	img.tiles[i].tileComps[comp].codeBlockStyle = codeBlockStyle;
+	img.tiles[i].tileComps[comp].transform = transform;
 	img.tiles[i].tileComps[comp].resLevels =
 	    (JPXResLevel *)greallocn(
 		     img.tiles[i].tileComps[comp].resLevels,
-		     (img.tiles[i].tileComps[comp].nDecompLevels + 1),
+		     nDecompLevels + 1,
 		     sizeof(JPXResLevel));
-	for (r = 0; r <= img.tiles[i].tileComps[comp].nDecompLevels; ++r) {
+	for (r = 0; r <= nDecompLevels; ++r) {
 	  img.tiles[i].tileComps[comp].resLevels[r].precincts = NULL;
 	}
       }
-      for (r = 0; r <= img.tiles[0].tileComps[comp].nDecompLevels; ++r) {
-	if (img.tiles[0].tileComps[comp].style & 0x01) {
+      for (r = 0; r <= nDecompLevels; ++r) {
+	if (style & 0x01) {
 	  if (!readUByte(&precinctSize)) {
 	    error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
+	    return jpxDecodeFatalError;
+	  }
+	  if (r > 0 && ((precinctSize & 0x0f) == 0 ||
+			(precinctSize & 0xf0) == 0)) {
+	    error(errSyntaxError, getPos(),
+		  "Invalid precinct size in JPX COD marker segment");
 	    return jpxDecodeFatalError;
 	  }
 	  img.tiles[0].tileComps[comp].resLevels[r].precinctWidth =
@@ -1250,6 +1266,7 @@ JPXDecodeResult JPXStream::readCodestream(Guint len) {
 	      "JPX QCC marker segment before QCD segment");
 	return jpxDecodeFatalError;
       }
+      comp = 0;
       if ((img.nComps > 256 && !readUWord(&comp)) ||
 	  (img.nComps <= 256 && !readUByte(&comp)) ||
 	  comp >= img.nComps ||
@@ -1499,9 +1516,14 @@ GBool JPXStream::readTilePart() {
   GBool haveSOD;
   Guint tileIdx, tilePartLen, tilePartIdx, nTileParts;
   GBool tilePartToEOC;
-  Guint precinctSize, style;
-  Guint n, nSBs, nx, ny, sbx0, sby0, comp, segLen;
-  Guint i, j, k, cbX, cbY, r, pre, sb, cbi, cbj;
+  Guint style, progOrder, nLayers, multiComp, nDecompLevels;
+  Guint codeBlockW, codeBlockH, codeBlockStyle, transform;
+  Guint precinctSize, qStyle;
+  Guint px0, py0, px1, py1;
+  Guint preCol0, preCol1, preRow0, preRow1, preCol, preRow;
+  Guint cbCol0, cbCol1, cbRow0, cbRow1, cbX, cbY;
+  Guint n, nSBs, nx, ny, comp, segLen;
+  Guint i, j, k, r, pre, sb, cbi, cbj;
   int segType, level;
 
   // process the SOT marker segment
@@ -1537,63 +1559,60 @@ GBool JPXStream::readTilePart() {
     switch (segType) {
     case 0x52:			// COD - coding style default
       cover(34);
-      if (!readUByte(&img.tiles[tileIdx].tileComps[0].style) ||
-	  !readUByte(&img.tiles[tileIdx].progOrder) ||
-	  !readUWord(&img.tiles[tileIdx].nLayers) ||
-	  !readUByte(&img.tiles[tileIdx].multiComp) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[0].nDecompLevels) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[0].codeBlockW) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[0].codeBlockH) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[0].codeBlockStyle) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[0].transform)) {
+      if (tilePartIdx != 0) {
+	error(errSyntaxError, getPos(), "Extraneous JPX COD marker segment");
+	return gFalse;
+      }
+      if (!readUByte(&style) ||
+	  !readUByte(&progOrder) ||
+	  !readUWord(&nLayers) ||
+	  !readUByte(&multiComp) ||
+	  !readUByte(&nDecompLevels) ||
+	  !readUByte(&codeBlockW) ||
+	  !readUByte(&codeBlockH) ||
+	  !readUByte(&codeBlockStyle) ||
+	  !readUByte(&transform)) {
 	error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
 	return gFalse;
       }
-      if (img.tiles[tileIdx].tileComps[0].nDecompLevels > 32 ||
-	  img.tiles[tileIdx].tileComps[0].codeBlockW > 8 ||
-	  img.tiles[tileIdx].tileComps[0].codeBlockH > 8) {
+      if (nDecompLevels < 1 ||
+	  nDecompLevels > 31 ||
+	  codeBlockW > 8 ||
+	  codeBlockH > 8) {
 	error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
 	return gFalse;
       }
-#if 1 //~ progression orders 2-4 are unimplemented
-      if (img.tiles[tileIdx].progOrder >= 2) {
-	error(errUnimplemented, -1,
-	      "JPX progression order {0:d} is unimplemented",
-	      img.tiles[tileIdx].progOrder);
-      }
-#endif
-      img.tiles[tileIdx].tileComps[0].codeBlockW += 2;
-      img.tiles[tileIdx].tileComps[0].codeBlockH += 2;
+      codeBlockW += 2;
+      codeBlockH += 2;
+      img.tiles[tileIdx].progOrder = progOrder;
+      img.tiles[tileIdx].nLayers = nLayers;
+      img.tiles[tileIdx].multiComp = multiComp;
       for (comp = 0; comp < img.nComps; ++comp) {
-	if (comp != 0) {
-	  img.tiles[tileIdx].tileComps[comp].style =
-	      img.tiles[tileIdx].tileComps[0].style;
-	  img.tiles[tileIdx].tileComps[comp].nDecompLevels =
-	      img.tiles[tileIdx].tileComps[0].nDecompLevels;
-	  img.tiles[tileIdx].tileComps[comp].codeBlockW =
-	      img.tiles[tileIdx].tileComps[0].codeBlockW;
-	  img.tiles[tileIdx].tileComps[comp].codeBlockH =
-	      img.tiles[tileIdx].tileComps[0].codeBlockH;
-	  img.tiles[tileIdx].tileComps[comp].codeBlockStyle =
-	      img.tiles[tileIdx].tileComps[0].codeBlockStyle;
-	  img.tiles[tileIdx].tileComps[comp].transform =
-	      img.tiles[tileIdx].tileComps[0].transform;
-	}
+	img.tiles[tileIdx].tileComps[comp].style = style;
+	img.tiles[tileIdx].tileComps[comp].nDecompLevels = nDecompLevels;
+	img.tiles[tileIdx].tileComps[comp].codeBlockW = codeBlockW;
+	img.tiles[tileIdx].tileComps[comp].codeBlockH = codeBlockH;
+	img.tiles[tileIdx].tileComps[comp].codeBlockStyle = codeBlockStyle;
+	img.tiles[tileIdx].tileComps[comp].transform = transform;
 	img.tiles[tileIdx].tileComps[comp].resLevels =
 	    (JPXResLevel *)greallocn(
 		     img.tiles[tileIdx].tileComps[comp].resLevels,
-		     (img.tiles[tileIdx].tileComps[comp].nDecompLevels + 1),
+		     nDecompLevels + 1,
 		     sizeof(JPXResLevel));
-	for (r = 0;
-	     r <= img.tiles[tileIdx].tileComps[comp].nDecompLevels;
-	     ++r) {
+	for (r = 0; r <= nDecompLevels; ++r) {
 	  img.tiles[tileIdx].tileComps[comp].resLevels[r].precincts = NULL;
 	}
       }
-      for (r = 0; r <= img.tiles[tileIdx].tileComps[0].nDecompLevels; ++r) {
-	if (img.tiles[tileIdx].tileComps[0].style & 0x01) {
+      for (r = 0; r <= nDecompLevels; ++r) {
+	if (style & 0x01) {
 	  if (!readUByte(&precinctSize)) {
 	    error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
+	    return gFalse;
+	  }
+	  if (r > 0 && ((precinctSize & 0x0f) == 0 ||
+			(precinctSize & 0xf0) == 0)) {
+	    error(errSyntaxError, getPos(),
+		  "Invalid precinct size in JPX COD marker segment");
 	    return gFalse;
 	  }
 	  img.tiles[tileIdx].tileComps[0].resLevels[r].precinctWidth =
@@ -1606,9 +1625,7 @@ GBool JPXStream::readTilePart() {
 	}
       }
       for (comp = 1; comp < img.nComps; ++comp) {
-	for (r = 0;
-	     r <= img.tiles[tileIdx].tileComps[comp].nDecompLevels;
-	     ++r) {
+	for (r = 0; r <= nDecompLevels; ++r) {
 	  img.tiles[tileIdx].tileComps[comp].resLevels[r].precinctWidth =
 	      img.tiles[tileIdx].tileComps[0].resLevels[r].precinctWidth;
 	  img.tiles[tileIdx].tileComps[comp].resLevels[r].precinctHeight =
@@ -1618,40 +1635,55 @@ GBool JPXStream::readTilePart() {
       break;
     case 0x53:			// COC - coding style component
       cover(35);
+      if (tilePartIdx != 0) {
+	error(errSyntaxError, getPos(), "Extraneous JPX COC marker segment");
+	return gFalse;
+      }
+      comp = 0;
       if ((img.nComps > 256 && !readUWord(&comp)) ||
 	  (img.nComps <= 256 && !readUByte(&comp)) ||
 	  comp >= img.nComps ||
 	  !readUByte(&style) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[comp].nDecompLevels) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[comp].codeBlockW) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[comp].codeBlockH) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[comp].codeBlockStyle) ||
-	  !readUByte(&img.tiles[tileIdx].tileComps[comp].transform)) {
+	  !readUByte(&nDecompLevels) ||
+	  !readUByte(&codeBlockW) ||
+	  !readUByte(&codeBlockH) ||
+	  !readUByte(&codeBlockStyle) ||
+	  !readUByte(&transform)) {
 	error(errSyntaxError, getPos(), "Error in JPX COC marker segment");
 	return gFalse;
       }
-      if (img.tiles[tileIdx].tileComps[comp].nDecompLevels > 32 ||
-	  img.tiles[tileIdx].tileComps[comp].codeBlockW > 8 ||
-	  img.tiles[tileIdx].tileComps[comp].codeBlockH > 8) {
-	error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
+      if (nDecompLevels < 1 ||
+	  nDecompLevels > 31 ||
+	  codeBlockW > 8 ||
+	  codeBlockH > 8) {
+	error(errSyntaxError, getPos(), "Error in JPX COC marker segment");
 	return gFalse;
       }
       img.tiles[tileIdx].tileComps[comp].style =
 	  (img.tiles[tileIdx].tileComps[comp].style & ~1) | (style & 1);
-      img.tiles[tileIdx].tileComps[comp].codeBlockW += 2;
-      img.tiles[tileIdx].tileComps[comp].codeBlockH += 2;
+      img.tiles[tileIdx].tileComps[comp].nDecompLevels = nDecompLevels;
+      img.tiles[tileIdx].tileComps[comp].codeBlockW = codeBlockW + 2;
+      img.tiles[tileIdx].tileComps[comp].codeBlockH = codeBlockH + 2;
+      img.tiles[tileIdx].tileComps[comp].codeBlockStyle = codeBlockStyle;
+      img.tiles[tileIdx].tileComps[comp].transform = transform;
       img.tiles[tileIdx].tileComps[comp].resLevels =
 	  (JPXResLevel *)greallocn(
 		     img.tiles[tileIdx].tileComps[comp].resLevels,
-		     (img.tiles[tileIdx].tileComps[comp].nDecompLevels + 1),
+		     nDecompLevels + 1,
 		     sizeof(JPXResLevel));
-      for (r = 0; r <= img.tiles[tileIdx].tileComps[comp].nDecompLevels; ++r) {
+      for (r = 0; r <= nDecompLevels; ++r) {
 	img.tiles[tileIdx].tileComps[comp].resLevels[r].precincts = NULL;
       }
-      for (r = 0; r <= img.tiles[tileIdx].tileComps[comp].nDecompLevels; ++r) {
-	if (img.tiles[tileIdx].tileComps[comp].style & 0x01) {
+      for (r = 0; r <= nDecompLevels; ++r) {
+	if (style & 0x01) {
 	  if (!readUByte(&precinctSize)) {
 	    error(errSyntaxError, getPos(), "Error in JPX COD marker segment");
+	    return gFalse;
+	  }
+	  if (r > 0 && ((precinctSize & 0x0f) == 0 ||
+			(precinctSize & 0xf0) == 0)) {
+	    error(errSyntaxError, getPos(),
+		  "Invalid precinct size in JPX COD marker segment");
 	    return gFalse;
 	  }
 	  img.tiles[tileIdx].tileComps[comp].resLevels[r].precinctWidth =
@@ -1666,6 +1698,10 @@ GBool JPXStream::readTilePart() {
       break;
     case 0x5c:			// QCD - quantization default
       cover(36);
+      if (tilePartIdx != 0) {
+	error(errSyntaxError, getPos(), "Extraneous JPX QCD marker segment");
+	return gFalse;
+      }
       if (!readUByte(&img.tiles[tileIdx].tileComps[0].quantStyle)) {
 	error(errSyntaxError, getPos(), "Error in JPX QCD marker segment");
 	return gFalse;
@@ -1733,6 +1769,11 @@ GBool JPXStream::readTilePart() {
       break;
     case 0x5d:			// QCC - quantization component
       cover(37);
+      if (tilePartIdx != 0) {
+	error(errSyntaxError, getPos(), "Extraneous JPX QCC marker segment");
+	return gFalse;
+      }
+      comp = 0;
       if ((img.nComps > 256 && !readUWord(&comp)) ||
 	  (img.nComps <= 256 && !readUByte(&comp)) ||
 	  comp >= img.nComps ||
@@ -1793,6 +1834,10 @@ GBool JPXStream::readTilePart() {
       break;
     case 0x5e:			// RGN - region of interest
       cover(38);
+      if (tilePartIdx != 0) {
+	error(errSyntaxError, getPos(), "Extraneous JPX RGN marker segment");
+	return gFalse;
+      }
 #if 1 //~ ROI is unimplemented
       error(errUnimplemented, -1, "Got a JPX RGN segment");
       if (segLen > 2 &&
@@ -1882,10 +1927,20 @@ GBool JPXStream::readTilePart() {
     }
   } while (!haveSOD);
 
+  for (comp = 0; comp < img.nComps; ++comp) {
+    tileComp = &img.tiles[tileIdx].tileComps[comp];
+    qStyle = tileComp->quantStyle & 0x1f;
+    if ((qStyle == 0 && tileComp->nQuantSteps < 3 * tileComp->nDecompLevels + 1) ||
+	(qStyle == 1 && tileComp->nQuantSteps < 1) ||
+	(qStyle == 2 && tileComp->nQuantSteps < 3 * tileComp->nDecompLevels + 1)) {
+      error(errSyntaxError, getPos(), "Too few quant steps in JPX tile part");
+      return gFalse;
+    }
+  }
+
   //----- initialize the tile, precincts, and code-blocks
   if (tilePartIdx == 0) {
     tile = &img.tiles[tileIdx];
-    tile->init = gTrue;
     i = tileIdx / img.nXTiles;
     j = tileIdx % img.nXTiles;
     if ((tile->x0 = img.xTileOffset + j * img.xTileSize) < img.xOffset) {
@@ -1904,7 +1959,9 @@ GBool JPXStream::readTilePart() {
     tile->res = 0;
     tile->precinct = 0;
     tile->layer = 0;
+    tile->done = gFalse;
     tile->maxNDecompLevels = 0;
+    tile->maxNPrecincts = 0;
     for (comp = 0; comp < img.nComps; ++comp) {
       tileComp = &tile->tileComps[comp];
       if (tileComp->nDecompLevels > tile->maxNDecompLevels) {
@@ -1914,12 +1971,16 @@ GBool JPXStream::readTilePart() {
       tileComp->y0 = jpxCeilDiv(tile->y0, tileComp->vSep);
       tileComp->x1 = jpxCeilDiv(tile->x1, tileComp->hSep);
       tileComp->y1 = jpxCeilDiv(tile->y1, tileComp->vSep);
-      tileComp->cbW = 1 << tileComp->codeBlockW;
-      tileComp->cbH = 1 << tileComp->codeBlockH;
-      tileComp->w = (tileComp->x1 - tileComp->x0 + (1 << reduction) - 1)
-	              >> reduction;
-      tileComp->h = (tileComp->y1 - tileComp->y0 + (1 << reduction) - 1)
-	              >> reduction;
+      tileComp->x0r = jpxCeilDivPow2(tileComp->x0, reduction);
+      tileComp->w = jpxCeilDivPow2(tileComp->x1, reduction) - tileComp->x0r;
+      tileComp->y0r = jpxCeilDivPow2(tileComp->y0, reduction);
+      tileComp->h = jpxCeilDivPow2(tileComp->y1, reduction) - tileComp->y0r;
+      if (tileComp->w == 0 || tileComp->h == 0 ||
+	  tileComp->w > INT_MAX / tileComp->h) {
+	error(errSyntaxError, getPos(),
+	      "Invalid tile size or sample separation in JPX stream");
+	return gFalse;
+      }
       tileComp->data = (int *)gmallocn(tileComp->w * tileComp->h, sizeof(int));
       if (tileComp->x1 - tileComp->x0 > tileComp->y1 - tileComp->y0) {
 	n = tileComp->x1 - tileComp->x0;
@@ -1929,159 +1990,215 @@ GBool JPXStream::readTilePart() {
       tileComp->buf = (int *)gmallocn(n + 8, sizeof(int));
       for (r = 0; r <= tileComp->nDecompLevels; ++r) {
 	resLevel = &tileComp->resLevels[r];
-	k = r == 0 ? tileComp->nDecompLevels
-	           : tileComp->nDecompLevels - r + 1;
-	resLevel->x0 = jpxCeilDivPow2(tileComp->x0, k);
-	resLevel->y0 = jpxCeilDivPow2(tileComp->y0, k);
-	resLevel->x1 = jpxCeilDivPow2(tileComp->x1, k);
-	resLevel->y1 = jpxCeilDivPow2(tileComp->y1, k);
+	resLevel->x0 = jpxCeilDivPow2(tileComp->x0,
+				      tileComp->nDecompLevels - r);
+	resLevel->y0 = jpxCeilDivPow2(tileComp->y0,
+				      tileComp->nDecompLevels - r);
+	resLevel->x1 = jpxCeilDivPow2(tileComp->x1,
+				      tileComp->nDecompLevels - r);
+	resLevel->y1 = jpxCeilDivPow2(tileComp->y1,
+				      tileComp->nDecompLevels - r);
+	resLevel->codeBlockW = r == 0 ? resLevel->precinctWidth
+	                              : resLevel->precinctWidth - 1;
+	if (resLevel->codeBlockW > tileComp->codeBlockW) {
+	  resLevel->codeBlockW = tileComp->codeBlockW;
+	}
+	resLevel->cbW = 1 << resLevel->codeBlockW;
+	resLevel->codeBlockH = r == 0 ? resLevel->precinctHeight
+	                              : resLevel->precinctHeight - 1;
+	if (resLevel->codeBlockH > tileComp->codeBlockH) {
+	  resLevel->codeBlockH = tileComp->codeBlockH;
+	}
+	resLevel->cbH = 1 << resLevel->codeBlockH;
+	// the JPEG 2000 spec says that packets for empty res levels
+	// should all be present in the codestream (B.6, B.9, B.10),
+	// but it appears that encoders drop packets if the res level
+	// AND the subbands are all completely empty
+	resLevel->empty = resLevel->x0 == resLevel->x1 ||
+	                  resLevel->y0 == resLevel->y1;
 	if (r == 0) {
+	  nSBs = 1;
 	  resLevel->bx0[0] = resLevel->x0;
 	  resLevel->by0[0] = resLevel->y0;
 	  resLevel->bx1[0] = resLevel->x1;
 	  resLevel->by1[0] = resLevel->y1;
+	  resLevel->empty = resLevel->empty &&
+	                    (resLevel->bx0[0] == resLevel->bx1[0] ||
+			     resLevel->by0[0] == resLevel->by1[0]);
 	} else {
-	  resLevel->bx0[0] = jpxCeilDivPow2(tileComp->x0 - (1 << (k-1)), k);
-	  resLevel->by0[0] = resLevel->y0;
-	  resLevel->bx1[0] = jpxCeilDivPow2(tileComp->x1 - (1 << (k-1)), k);
-	  resLevel->by1[0] = resLevel->y1;
-	  resLevel->bx0[1] = resLevel->x0;
-	  resLevel->by0[1] = jpxCeilDivPow2(tileComp->y0 - (1 << (k-1)), k);
-	  resLevel->bx1[1] = resLevel->x1;
-	  resLevel->by1[1] = jpxCeilDivPow2(tileComp->y1 - (1 << (k-1)), k);
-	  resLevel->bx0[2] = jpxCeilDivPow2(tileComp->x0 - (1 << (k-1)), k);
-	  resLevel->by0[2] = jpxCeilDivPow2(tileComp->y0 - (1 << (k-1)), k);
-	  resLevel->bx1[2] = jpxCeilDivPow2(tileComp->x1 - (1 << (k-1)), k);
-	  resLevel->by1[2] = jpxCeilDivPow2(tileComp->y1 - (1 << (k-1)), k);
+	  nSBs = 3;
+	  resLevel->bx0[0] = jpxCeilDivPow2(resLevel->x0 - 1, 1);
+	  resLevel->by0[0] = jpxCeilDivPow2(resLevel->y0, 1);
+	  resLevel->bx1[0] = jpxCeilDivPow2(resLevel->x1 - 1, 1);
+	  resLevel->by1[0] = jpxCeilDivPow2(resLevel->y1, 1);
+	  resLevel->bx0[1] = jpxCeilDivPow2(resLevel->x0, 1);
+	  resLevel->by0[1] = jpxCeilDivPow2(resLevel->y0 - 1, 1);
+	  resLevel->bx1[1] = jpxCeilDivPow2(resLevel->x1, 1);
+	  resLevel->by1[1] = jpxCeilDivPow2(resLevel->y1 - 1, 1);
+	  resLevel->bx0[2] = jpxCeilDivPow2(resLevel->x0 - 1, 1);
+	  resLevel->by0[2] = jpxCeilDivPow2(resLevel->y0 - 1, 1);
+	  resLevel->bx1[2] = jpxCeilDivPow2(resLevel->x1 - 1, 1);
+	  resLevel->by1[2] = jpxCeilDivPow2(resLevel->y1 - 1, 1);
+	  resLevel->empty = resLevel->empty &&
+	                    (resLevel->bx0[0] == resLevel->bx1[0] ||
+			     resLevel->by0[0] == resLevel->by1[0]) &&
+	                    (resLevel->bx0[1] == resLevel->bx1[1] ||
+			     resLevel->by0[1] == resLevel->by1[1]) &&
+	                    (resLevel->bx0[2] == resLevel->bx1[2] ||
+			     resLevel->by0[2] == resLevel->by1[2]);
 	}
-	resLevel->precincts = (JPXPrecinct *)gmallocn(1, sizeof(JPXPrecinct));
-	for (pre = 0; pre < 1; ++pre) {
+	preCol0 = jpxFloorDivPow2(resLevel->x0, resLevel->precinctWidth);
+	preCol1 = jpxCeilDivPow2(resLevel->x1, resLevel->precinctWidth);
+	preRow0 = jpxFloorDivPow2(resLevel->y0, resLevel->precinctHeight);
+	preRow1 = jpxCeilDivPow2(resLevel->y1, resLevel->precinctHeight);
+	resLevel->nPrecincts = (preCol1 - preCol0) * (preRow1 - preRow0);
+	resLevel->precincts = (JPXPrecinct *)gmallocn(resLevel->nPrecincts,
+						      sizeof(JPXPrecinct));
+	if (resLevel->nPrecincts > tile->maxNPrecincts) {
+	  tile->maxNPrecincts = resLevel->nPrecincts;
+	}
+	for (pre = 0; pre < resLevel->nPrecincts; ++pre) {
 	  resLevel->precincts[pre].subbands = NULL;
 	}
-	for (pre = 0; pre < 1; ++pre) {
-	  precinct = &resLevel->precincts[pre];
-	  precinct->x0 = resLevel->x0;
-	  precinct->y0 = resLevel->y0;
-	  precinct->x1 = resLevel->x1;
-	  precinct->y1 = resLevel->y1;
-	  nSBs = r == 0 ? 1 : 3;
-	  precinct->subbands =
-	      (JPXSubband *)gmallocn(nSBs, sizeof(JPXSubband));
-	  for (sb = 0; sb < nSBs; ++sb) {
-	    precinct->subbands[sb].inclusion = NULL;
-	    precinct->subbands[sb].zeroBitPlane = NULL;
-	    precinct->subbands[sb].cbs = NULL;
-	  }
-	  for (sb = 0; sb < nSBs; ++sb) {
-	    subband = &precinct->subbands[sb];
-	    subband->x0 = resLevel->bx0[sb];
-	    subband->y0 = resLevel->by0[sb];
-	    subband->x1 = resLevel->bx1[sb];
-	    subband->y1 = resLevel->by1[sb];
-	    subband->nXCBs = jpxCeilDivPow2(subband->x1,
-					    tileComp->codeBlockW)
-	                     - jpxFloorDivPow2(subband->x0,
-					       tileComp->codeBlockW);
-	    subband->nYCBs = jpxCeilDivPow2(subband->y1,
-					    tileComp->codeBlockH)
-	                     - jpxFloorDivPow2(subband->y0,
-					       tileComp->codeBlockH);
-	    n = subband->nXCBs > subband->nYCBs ? subband->nXCBs
-	                                        : subband->nYCBs;
-	    for (subband->maxTTLevel = 0, --n;
-		 n;
-		 ++subband->maxTTLevel, n >>= 1) ;
-	    n = 0;
-	    for (level = subband->maxTTLevel; level >= 0; --level) {
-	      nx = jpxCeilDivPow2(subband->nXCBs, level);
-	      ny = jpxCeilDivPow2(subband->nYCBs, level);
-	      n += nx * ny;
+	precinct = resLevel->precincts;
+	for (preRow = preRow0; preRow < preRow1; ++preRow) {
+	  for (preCol = preCol0; preCol < preCol1; ++preCol) {
+	    precinct->subbands =
+	        (JPXSubband *)gmallocn(nSBs, sizeof(JPXSubband));
+	    for (sb = 0; sb < nSBs; ++sb) {
+	      precinct->subbands[sb].inclusion = NULL;
+	      precinct->subbands[sb].zeroBitPlane = NULL;
+	      precinct->subbands[sb].cbs = NULL;
 	    }
-	    subband->inclusion =
-	        (JPXTagTreeNode *)gmallocn(n, sizeof(JPXTagTreeNode));
-	    subband->zeroBitPlane =
-	        (JPXTagTreeNode *)gmallocn(n, sizeof(JPXTagTreeNode));
-	    for (k = 0; k < n; ++k) {
-	      subband->inclusion[k].finished = gFalse;
-	      subband->inclusion[k].val = 0;
-	      subband->zeroBitPlane[k].finished = gFalse;
-	      subband->zeroBitPlane[k].val = 0;
-	    }
-	    subband->cbs = (JPXCodeBlock *)gmallocn(subband->nXCBs *
-						      subband->nYCBs,
-						    sizeof(JPXCodeBlock));
-	    for (k = 0; k < subband->nXCBs * subband->nYCBs; ++k) {
-	      subband->cbs[k].dataLen = NULL;
-	      subband->cbs[k].touched = NULL;
-	      subband->cbs[k].arithDecoder = NULL;
-	      subband->cbs[k].stats = NULL;
-	    }
-	    sbx0 = jpxFloorDivPow2(subband->x0, tileComp->codeBlockW);
-	    sby0 = jpxFloorDivPow2(subband->y0, tileComp->codeBlockH);
-	    if (r == 0) { // (NL)LL
-	      sbCoeffs = tileComp->data;
-	    } else if (sb == 0) { // (NL-r+1)HL
-	      sbCoeffs = tileComp->data
-		         + resLevel->bx1[1] - resLevel->bx0[1];
-	    } else if (sb == 1) { // (NL-r+1)LH
-	      sbCoeffs = tileComp->data
-		         + (resLevel->by1[0] - resLevel->by0[0]) * tileComp->w;
-	    } else { // (NL-r+1)HH
-	      sbCoeffs = tileComp->data
-		         + (resLevel->by1[0] - resLevel->by0[0]) * tileComp->w
-		         + resLevel->bx1[1] - resLevel->bx0[1];
-	    }
-	    cb = subband->cbs;
-	    for (cbY = 0; cbY < subband->nYCBs; ++cbY) {
-	      for (cbX = 0; cbX < subband->nXCBs; ++cbX) {
-		cb->x0 = (sbx0 + cbX) << tileComp->codeBlockW;
-		cb->x1 = cb->x0 + tileComp->cbW;
-		if (subband->x0 > cb->x0) {
-		  cb->x0 = subband->x0;
-		}
-		if (subband->x1 < cb->x1) {
-		  cb->x1 = subband->x1;
-		}
-		cb->y0 = (sby0 + cbY) << tileComp->codeBlockH;
-		cb->y1 = cb->y0 + tileComp->cbH;
-		if (subband->y0 > cb->y0) {
-		  cb->y0 = subband->y0;
-		}
-		if (subband->y1 < cb->y1) {
-		  cb->y1 = subband->y1;
-		}
-		cb->seen = gFalse;
-		cb->lBlock = 3;
-		cb->nextPass = jpxPassCleanup;
-		cb->nZeroBitPlanes = 0;
-		cb->dataLenSize = 1;
-		cb->dataLen = (Guint *)gmalloc(sizeof(Guint));
-		if (r <= tileComp->nDecompLevels - reduction) {
-		  cb->coeffs = sbCoeffs
-		               + (cb->y0 - subband->y0) * tileComp->w
-		               + (cb->x0 - subband->x0);
-		  cb->touched = (char *)gmalloc(1 << (tileComp->codeBlockW
-						      + tileComp->codeBlockH));
-		  cb->len = 0;
-		  for (cbj = 0; cbj < cb->y1 - cb->y0; ++cbj) {
-		    for (cbi = 0; cbi < cb->x1 - cb->x0; ++cbi) {
-		      cb->coeffs[cbj * tileComp->w + cbi] = 0;
-		    }
+	    for (sb = 0; sb < nSBs; ++sb) {
+	      subband = &precinct->subbands[sb];
+	      if (r == 0) {
+		px0 = preCol << resLevel->precinctWidth;
+		px1 = (preCol + 1) << resLevel->precinctWidth;
+		py0 = preRow << resLevel->precinctHeight;
+		py1 = (preRow + 1) << resLevel->precinctHeight;
+	      } else {
+		px0 = preCol << (resLevel->precinctWidth - 1);
+		px1 = (preCol + 1) << (resLevel->precinctWidth - 1);
+		py0 = preRow << (resLevel->precinctHeight - 1);
+		py1 = (preRow + 1) << (resLevel->precinctHeight - 1);
+	      }
+	      if (px0 < resLevel->bx0[sb]) {
+		px0 = resLevel->bx0[sb];
+	      }
+	      if (px1 > resLevel->bx1[sb]) {
+		px1 = resLevel->bx1[sb];
+	      }
+	      if (py0 < resLevel->by0[sb]) {
+		py0 = resLevel->by0[sb];
+	      }
+	      if (py1 > resLevel->by1[sb]) {
+		py1 = resLevel->by1[sb];
+	      }
+	      if (r == 0) { // (NL)LL
+		sbCoeffs = tileComp->data;
+	      } else if (sb == 0) { // (NL-r+1)HL
+		sbCoeffs = tileComp->data
+                           + resLevel->bx1[1] - resLevel->bx0[1];
+	      } else if (sb == 1) { // (NL-r+1)LH
+		sbCoeffs = tileComp->data
+		           + (resLevel->by1[0] - resLevel->by0[0]) * tileComp->w;
+	      } else { // (NL-r+1)HH
+		sbCoeffs = tileComp->data
+		           + (resLevel->by1[0] - resLevel->by0[0]) * tileComp->w
+		           + (resLevel->bx1[1] - resLevel->bx0[1]);
+	      }
+	      cbCol0 = jpxFloorDivPow2(px0, resLevel->codeBlockW);
+	      cbCol1 = jpxCeilDivPow2(px1, resLevel->codeBlockW);
+	      cbRow0 = jpxFloorDivPow2(py0, resLevel->codeBlockH);
+	      cbRow1 = jpxCeilDivPow2(py1, resLevel->codeBlockH);
+	      subband->nXCBs = cbCol1 - cbCol0;
+	      subband->nYCBs = cbRow1 - cbRow0;
+	      n = subband->nXCBs > subband->nYCBs ? subband->nXCBs
+	                                          : subband->nYCBs;
+	      for (subband->maxTTLevel = 0, --n;
+		   n;
+		   ++subband->maxTTLevel, n >>= 1) ;
+	      n = 0;
+	      for (level = subband->maxTTLevel; level >= 0; --level) {
+		nx = jpxCeilDivPow2(subband->nXCBs, level);
+		ny = jpxCeilDivPow2(subband->nYCBs, level);
+		n += nx * ny;
+	      }
+	      subband->inclusion =
+	          (JPXTagTreeNode *)gmallocn(n, sizeof(JPXTagTreeNode));
+	      subband->zeroBitPlane =
+	          (JPXTagTreeNode *)gmallocn(n, sizeof(JPXTagTreeNode));
+	      for (k = 0; k < n; ++k) {
+		subband->inclusion[k].finished = gFalse;
+		subband->inclusion[k].val = 0;
+		subband->zeroBitPlane[k].finished = gFalse;
+		subband->zeroBitPlane[k].val = 0;
+	      }
+	      subband->cbs = (JPXCodeBlock *)gmallocn(subband->nXCBs *
+						        subband->nYCBs,
+						      sizeof(JPXCodeBlock));
+	      for (k = 0; k < subband->nXCBs * subband->nYCBs; ++k) {
+		subband->cbs[k].dataLen = NULL;
+		subband->cbs[k].touched = NULL;
+		subband->cbs[k].arithDecoder = NULL;
+		subband->cbs[k].stats = NULL;
+	      }
+	      cb = subband->cbs;
+	      for (cbY = cbRow0; cbY < cbRow1; ++cbY) {
+		for (cbX = cbCol0; cbX < cbCol1; ++cbX) {
+		  cb->x0 = cbX << resLevel->codeBlockW;
+		  cb->x1 = cb->x0 + resLevel->cbW;
+		  if (cb->x0 < px0) {
+		    cb->x0 = px0;
 		  }
-		  memset(cb->touched, 0,
-			 (1 << (tileComp->codeBlockW + tileComp->codeBlockH)));
-		} else {
-		  cb->coeffs = NULL;
-		  cb->touched = NULL;
-		  cb->len = 0;
+		  if (cb->x1 > px1) {
+		    cb->x1 = px1;
+		  }
+		  cb->y0 = cbY << resLevel->codeBlockH;
+		  cb->y1 = cb->y0 + resLevel->cbH;
+		  if (cb->y0 < py0) {
+		    cb->y0 = py0;
+		  }
+		  if (cb->y1 > py1) {
+		    cb->y1 = py1;
+		  }
+		  cb->seen = gFalse;
+		  cb->lBlock = 3;
+		  cb->nextPass = jpxPassCleanup;
+		  cb->nZeroBitPlanes = 0;
+		  cb->dataLenSize = 1;
+		  cb->dataLen = (Guint *)gmalloc(sizeof(Guint));
+		  if (r <= tileComp->nDecompLevels - reduction) {
+		    cb->coeffs = sbCoeffs
+		                 + (cb->y0 - resLevel->by0[sb]) * tileComp->w
+		                 + (cb->x0 - resLevel->bx0[sb]);
+		    cb->touched = (char *)gmalloc(1 << (resLevel->codeBlockW
+							+ resLevel->codeBlockH));
+		    cb->len = 0;
+		    for (cbj = 0; cbj < cb->y1 - cb->y0; ++cbj) {
+		      for (cbi = 0; cbi < cb->x1 - cb->x0; ++cbi) {
+			cb->coeffs[cbj * tileComp->w + cbi] = 0;
+		      }
+		    }
+		    memset(cb->touched, 0,
+			   ((size_t)1 << (resLevel->codeBlockW
+					  + resLevel->codeBlockH)));
+		  } else {
+		    cb->coeffs = NULL;
+		    cb->touched = NULL;
+		    cb->len = 0;
+		  }
+		  ++cb;
 		}
-		++cb;
 	      }
 	    }
+	    ++precinct;
 	  }
 	}
       }
     }
+    tile->init = gTrue;
   }
 
   return readTilePartData(tileIdx, tilePartLen, tilePartToEOC);
@@ -2103,6 +2220,13 @@ GBool JPXStream::readTilePartData(Guint tileIdx,
 
   // read all packets from this tile-part
   while (1) {
+
+    // if the tile is finished, skip any remaining data
+    if (tile->done) {
+      bufStr->discardChars(tilePartLen);
+      return gTrue;
+    }
+
     if (tilePartToEOC) {
       //~ peek for an EOC marker
       cover(93);
@@ -2113,6 +2237,10 @@ GBool JPXStream::readTilePartData(Guint tileIdx,
     tileComp = &tile->tileComps[tile->comp];
     resLevel = &tileComp->resLevels[tile->res];
     precinct = &resLevel->precincts[tile->precinct];
+
+    if (resLevel->empty) {
+      goto nextPacket;
+    }
 
     //----- packet header
 
@@ -2343,69 +2471,114 @@ GBool JPXStream::readTilePartData(Guint tileIdx,
 
     //----- next packet
 
+  nextPacket:
     switch (tile->progOrder) {
     case 0: // layer, resolution level, component, precinct
       cover(58);
-      if (++tile->comp == img.nComps) {
-	tile->comp = 0;
-	if (++tile->res == tile->maxNDecompLevels + 1) {
-	  tile->res = 0;
-	  if (++tile->layer == tile->nLayers) {
-	    tile->layer = 0;
+      do {
+	if (++tile->precinct == tile->maxNPrecincts) {
+	  tile->precinct = 0;
+	  if (++tile->comp == img.nComps) {
+	    tile->comp = 0;
+	    if (++tile->res == tile->maxNDecompLevels + 1) {
+	      tile->res = 0;
+	      if (++tile->layer == tile->nLayers) {
+		tile->layer = 0;
+		tile->done = gTrue;
+	      }
+	    }
 	  }
 	}
-      }
+      } while (!tile->done &&
+	       (tile->res > tile->tileComps[tile->comp].nDecompLevels ||
+		tile->precinct >= tile->tileComps[tile->comp]
+	                                  .resLevels[tile->res].nPrecincts));
       break;
     case 1: // resolution level, layer, component, precinct
       cover(59);
-      if (++tile->comp == img.nComps) {
-	tile->comp = 0;
+      do {
+	if (++tile->precinct == tile->maxNPrecincts) {
+	  tile->precinct = 0;
+	  if (++tile->comp == img.nComps) {
+	    tile->comp = 0;
+	    if (++tile->layer == tile->nLayers) {
+	      tile->layer = 0;
+	      if (++tile->res == tile->maxNDecompLevels + 1) {
+		tile->res = 0;
+		tile->done = gTrue;
+	      }
+	    }
+	  }
+	}
+      } while (!tile->done &&
+	       (tile->res > tile->tileComps[tile->comp].nDecompLevels ||
+		tile->precinct >= tile->tileComps[tile->comp]
+	                                  .resLevels[tile->res].nPrecincts));
+      break;
+    case 2: // resolution level, precinct, component, layer
+      cover(60);
+      //~ this is incorrect if there are subsampled components (?)
+      do {
+	if (++tile->layer == tile->nLayers) {
+	  tile->layer = 0;
+	  if (++tile->comp == img.nComps) {
+	    tile->comp = 0;
+	    if (++tile->precinct == tile->maxNPrecincts) {
+	      tile->precinct = 0;
+	      if (++tile->res == tile->maxNDecompLevels + 1) {
+		tile->res = 0;
+		tile->done = gTrue;
+	      }
+	    }
+	  }
+	}
+      } while (!tile->done &&
+	       (tile->res > tile->tileComps[tile->comp].nDecompLevels ||
+		tile->precinct >= tile->tileComps[tile->comp]
+	                                  .resLevels[tile->res].nPrecincts));
+      break;
+    case 3: // precinct, component, resolution level, layer
+      cover(61);
+      //~ this is incorrect if there are subsampled components (?)
+      do {
 	if (++tile->layer == tile->nLayers) {
 	  tile->layer = 0;
 	  if (++tile->res == tile->maxNDecompLevels + 1) {
 	    tile->res = 0;
+	    if (++tile->comp == img.nComps) {
+	      tile->comp = 0;
+	      if (++tile->precinct == tile->maxNPrecincts) {
+		tile->precinct = 0;
+		tile->done = gTrue;
+	      }
+	    }
 	  }
 	}
-      }
-      break;
-    case 2: // resolution level, precinct, component, layer
-      //~ this isn't correct -- see B.12.1.3
-      cover(60);
-      if (++tile->layer == tile->nLayers) {
-	tile->layer = 0;
-	if (++tile->comp == img.nComps) {
-	  tile->comp = 0;
-	  if (++tile->res == tile->maxNDecompLevels + 1) {
-	    tile->res = 0;
-	  }
-	}
-      }
-      break;
-    case 3: // precinct, component, resolution level, layer
-      //~ this isn't correct -- see B.12.1.4
-      cover(61);
-      if (++tile->layer == tile->nLayers) {
-	tile->layer = 0;
-	if (++tile->res == tile->maxNDecompLevels + 1) {
-	  tile->res = 0;
-	  if (++tile->comp == img.nComps) {
-	    tile->comp = 0;
-	  }
-	}
-      }
+      } while (!tile->done &&
+	       (tile->res > tile->tileComps[tile->comp].nDecompLevels ||
+		tile->precinct >= tile->tileComps[tile->comp]
+	                                  .resLevels[tile->res].nPrecincts));
       break;
     case 4: // component, precinct, resolution level, layer
-      //~ this isn't correct -- see B.12.1.5
       cover(62);
-      if (++tile->layer == tile->nLayers) {
-	tile->layer = 0;
-	if (++tile->res == tile->maxNDecompLevels + 1) {
-	  tile->res = 0;
-	  if (++tile->comp == img.nComps) {
-	    tile->comp = 0;
+      do {
+	if (++tile->layer == tile->nLayers) {
+	  tile->layer = 0;
+	  if (++tile->res == tile->maxNDecompLevels + 1) {
+	    tile->res = 0;
+	    if (++tile->precinct == tile->maxNPrecincts) {
+	      tile->precinct = 0;
+	      if (++tile->comp == img.nComps) {
+		tile->comp = 0;
+		tile->done = gTrue;
+	      }
+	    }
 	  }
 	}
-      }
+      } while (!tile->done &&
+	       (tile->res > tile->tileComps[tile->comp].nDecompLevels ||
+		tile->precinct >= tile->tileComps[tile->comp]
+	                                  .resLevels[tile->res].nPrecincts));
       break;
     }
   }
@@ -2446,7 +2619,12 @@ GBool JPXStream::readCodeBlockData(JPXTileComp *tileComp,
 
   if (cb->arithDecoder) {
     cover(63);
-    cb->arithDecoder->restart(cb->dataLen[0]);
+    if (tileComp->codeBlockStyle & 0x04) {
+      cb->arithDecoder->setStream(bufStr, cb->dataLen[0]);
+      cb->arithDecoder->start();
+    } else {
+      cb->arithDecoder->restart(cb->dataLen[0]);
+    }
   } else {
     cover(64);
     cb->arithDecoder = new JArithmeticDecoder();
@@ -2472,13 +2650,13 @@ GBool JPXStream::readCodeBlockData(JPXTileComp *tileComp,
       for (y0 = cb->y0, coeff0 = cb->coeffs, touched0 = cb->touched;
 	   y0 < cb->y1;
 	   y0 += 4, coeff0 += 4 * tileComp->w,
-	     touched0 += 4 << tileComp->codeBlockW) {
+	     touched0 += 4 << resLevel->codeBlockW) {
 	for (x = cb->x0, coeff1 = coeff0, touched1 = touched0;
 	     x < cb->x1;
 	     ++x, ++coeff1, ++touched1) {
 	  for (y1 = 0, coeff = coeff1, touched = touched1;
 	       y1 < 4 && y0+y1 < cb->y1;
-	       ++y1, coeff += tileComp->w, touched += tileComp->cbW) {
+	       ++y1, coeff += tileComp->w, touched += resLevel->cbW) {
 	    if (!*coeff) {
 	      horiz = vert = diag = 0;
 	      horizSign = vertSign = 2;
@@ -2547,13 +2725,13 @@ GBool JPXStream::readCodeBlockData(JPXTileComp *tileComp,
       for (y0 = cb->y0, coeff0 = cb->coeffs, touched0 = cb->touched;
 	   y0 < cb->y1;
 	   y0 += 4, coeff0 += 4 * tileComp->w,
-	     touched0 += 4 << tileComp->codeBlockW) {
+	     touched0 += 4 << resLevel->codeBlockW) {
 	for (x = cb->x0, coeff1 = coeff0, touched1 = touched0;
 	     x < cb->x1;
 	     ++x, ++coeff1, ++touched1) {
 	  for (y1 = 0, coeff = coeff1, touched = touched1;
 	       y1 < 4 && y0+y1 < cb->y1;
-	       ++y1, coeff += tileComp->w, touched += tileComp->cbW) {
+	       ++y1, coeff += tileComp->w, touched += resLevel->cbW) {
 	    if (*coeff && !*touched) {
 	      if (*coeff == 1 || *coeff == -1) {
 		all = 0;
@@ -2608,16 +2786,16 @@ GBool JPXStream::readCodeBlockData(JPXTileComp *tileComp,
       for (y0 = cb->y0, coeff0 = cb->coeffs, touched0 = cb->touched;
 	   y0 < cb->y1;
 	   y0 += 4, coeff0 += 4 * tileComp->w,
-	     touched0 += 4 << tileComp->codeBlockW) {
+	     touched0 += 4 << resLevel->codeBlockW) {
 	for (x = cb->x0, coeff1 = coeff0, touched1 = touched0;
 	     x < cb->x1;
 	     ++x, ++coeff1, ++touched1) {
 	  y1 = 0;
 	  if (y0 + 3 < cb->y1 &&
 	      !(*touched1) &&
-	      !(touched1[tileComp->cbW]) &&
-	      !(touched1[2 * tileComp->cbW]) &&
-	      !(touched1[3 * tileComp->cbW]) &&
+	      !(touched1[resLevel->cbW]) &&
+	      !(touched1[2 * resLevel->cbW]) &&
+	      !(touched1[3 * resLevel->cbW]) &&
 	      (x == cb->x0 || y0 == cb->y0 ||
 	       !coeff1[-(int)tileComp->w - 1]) &&
 	      (y0 == cb->y0 ||
@@ -2659,9 +2837,9 @@ GBool JPXStream::readCodeBlockData(JPXTileComp *tileComp,
 	    }
 	  }
 	  for (coeff = &coeff1[y1 * tileComp->w],
-		 touched = &touched1[y1 << tileComp->codeBlockW];
+		 touched = &touched1[y1 << resLevel->codeBlockW];
 	       y1 < 4 && y0 + y1 < cb->y1;
-	       ++y1, coeff += tileComp->w, touched += tileComp->cbW) {
+	       ++y1, coeff += tileComp->w, touched += resLevel->cbW) {
 	    if (!*touched) {
 	      horiz = vert = diag = 0;
 	      horizSign = vertSign = 2;
@@ -2771,15 +2949,13 @@ void JPXStream::inverseTransform(JPXTileComp *tileComp) {
   int shift2;
   double mu;
   int val;
-  Guint r, cbX, cbY, x, y;
+  Guint r, pre, cbX, cbY, x, y;
 
   cover(68);
 
   //----- (NL)LL subband (resolution level 0)
 
   resLevel = &tileComp->resLevels[0];
-  precinct = &resLevel->precincts[0];
-  subband = &precinct->subbands[0];
 
   // i-quant parameters
   qStyle = tileComp->quantStyle & 0x1f;
@@ -2800,44 +2976,48 @@ void JPXStream::inverseTransform(JPXTileComp *tileComp) {
   }
 
   // do fixed point adjustment and dequantization on (NL)LL
-  cb = subband->cbs;
-  for (cbY = 0; cbY < subband->nYCBs; ++cbY) {
-    for (cbX = 0; cbX < subband->nXCBs; ++cbX) {
-      for (y = cb->y0, coeff0 = cb->coeffs, touched0 = cb->touched;
-	   y < cb->y1;
-	   ++y, coeff0 += tileComp->w, touched0 += tileComp->cbW) {
-	for (x = cb->x0, coeff = coeff0, touched = touched0;
-	     x < cb->x1;
-	     ++x, ++coeff, ++touched) {
-	  val = *coeff;
-	  if (val != 0) {
-	    shift2 = shift - (cb->nZeroBitPlanes + cb->len + *touched);
-	    if (shift2 > 0) {
-	      cover(94);
-	      if (val < 0) {
-		val = (val << shift2) - (1 << (shift2 - 1));
+  for (pre = 0; pre < resLevel->nPrecincts; ++pre) {
+    precinct = &resLevel->precincts[pre];
+    subband = &precinct->subbands[0];
+    cb = subband->cbs;
+    for (cbY = 0; cbY < subband->nYCBs; ++cbY) {
+      for (cbX = 0; cbX < subband->nXCBs; ++cbX) {
+	for (y = cb->y0, coeff0 = cb->coeffs, touched0 = cb->touched;
+	     y < cb->y1;
+	     ++y, coeff0 += tileComp->w, touched0 += resLevel->cbW) {
+	  for (x = cb->x0, coeff = coeff0, touched = touched0;
+	       x < cb->x1;
+	       ++x, ++coeff, ++touched) {
+	    val = *coeff;
+	    if (val != 0) {
+	      shift2 = shift - (cb->nZeroBitPlanes + cb->len + *touched);
+	      if (shift2 > 0) {
+		cover(94);
+		if (val < 0) {
+		  val = (val << shift2) - (1 << (shift2 - 1));
+		} else {
+		  val = (val << shift2) + (1 << (shift2 - 1));
+		}
 	      } else {
-		val = (val << shift2) + (1 << (shift2 - 1));
+		cover(95);
+		val >>= -shift2;
 	      }
-	    } else {
-	      cover(95);
-	      val >>= -shift2;
-	    }
-	    if (qStyle == 0) {
-	      cover(96);
-	      if (tileComp->transform == 0) {
-		cover(97);
-		val &= -1 << (fracBits - tileComp->prec);
+	      if (qStyle == 0) {
+		cover(96);
+		if (tileComp->transform == 0) {
+		  cover(97);
+		  val &= -1 << (fracBits - tileComp->prec);
+		}
+	      } else {
+		cover(98);
+		val = (int)((double)val * mu);
 	      }
-	    } else {
-	      cover(98);
-	      val = (int)((double)val * mu);
 	    }
+	    *coeff = val;
 	  }
-	  *coeff = val;
 	}
+	++cb;
       }
-      ++cb;
     }
   }
 
@@ -2871,13 +3051,32 @@ void JPXStream::inverseTransformLevel(JPXTileComp *tileComp,
   int val;
   int *dataPtr, *bufPtr;
   Guint nx1, nx2, ny1, ny2, offset;
-  Guint x, y, sb, cbX, cbY;
-
-  //----- fixed-point adjustment and dequantization
+  Guint x, y, sb, pre, cbX, cbY;
 
   qStyle = tileComp->quantStyle & 0x1f;
   guard = (tileComp->quantStyle >> 5) & 7;
-  precinct = &resLevel->precincts[0];
+
+  //----- compute subband bounds
+
+  //    0   nx1  nx2
+  //    |    |    |
+  //    v    v    v
+  //   +----+----+
+  //   | LL | HL | <- 0
+  //   +----+----+
+  //   | LH | HH | <- ny1
+  //   +----+----+
+  //               <- ny2
+  nx1 = resLevel->bx1[1] - resLevel->bx0[1];
+  nx2 = nx1 + resLevel->bx1[0] - resLevel->bx0[0];
+  ny1 = resLevel->by1[0] - resLevel->by0[0];
+  ny2 = ny1 + resLevel->by1[1] - resLevel->by0[1];
+  if (nx2 == 0 || ny2 == 0) {
+    return;
+  }
+
+  //----- fixed-point adjustment and dequantization
+
   for (sb = 0; sb < 3; ++sb) {
 
     // i-quant parameters
@@ -2902,73 +3101,58 @@ void JPXStream::inverseTransformLevel(JPXTileComp *tileComp,
     }
 
     // fixed point adjustment and dequantization
-    subband = &precinct->subbands[sb];
-    cb = subband->cbs;
-    for (cbY = 0; cbY < subband->nYCBs; ++cbY) {
-      for (cbX = 0; cbX < subband->nXCBs; ++cbX) {
-	for (y = cb->y0, coeff0 = cb->coeffs, touched0 = cb->touched;
-	     y < cb->y1;
-	     ++y, coeff0 += tileComp->w, touched0 += tileComp->cbW) {
-	  for (x = cb->x0, coeff = coeff0, touched = touched0;
-	       x < cb->x1;
-	       ++x, ++coeff, ++touched) {
-	    val = *coeff;
-	    if (val != 0) {
-	      shift2 = shift - (cb->nZeroBitPlanes + cb->len + *touched);
-	      if (shift2 > 0) {
-		cover(74);
-		if (val < 0) {
-		  val = (val << shift2) - (1 << (shift2 - 1));
+
+    for (pre = 0; pre < resLevel->nPrecincts; ++pre) {
+      precinct = &resLevel->precincts[pre];
+      subband = &precinct->subbands[sb];
+      cb = subband->cbs;
+      for (cbY = 0; cbY < subband->nYCBs; ++cbY) {
+	for (cbX = 0; cbX < subband->nXCBs; ++cbX) {
+	  for (y = cb->y0, coeff0 = cb->coeffs, touched0 = cb->touched;
+	       y < cb->y1;
+	       ++y, coeff0 += tileComp->w, touched0 += resLevel->cbW) {
+	    for (x = cb->x0, coeff = coeff0, touched = touched0;
+		 x < cb->x1;
+		 ++x, ++coeff, ++touched) {
+	      val = *coeff;
+	      if (val != 0) {
+		shift2 = shift - (cb->nZeroBitPlanes + cb->len + *touched);
+		if (shift2 > 0) {
+		  cover(74);
+		  if (val < 0) {
+		    val = (val << shift2) - (1 << (shift2 - 1));
+		  } else {
+		    val = (val << shift2) + (1 << (shift2 - 1));
+		  }
 		} else {
-		  val = (val << shift2) + (1 << (shift2 - 1));
+		  cover(75);
+		  val >>= -shift2;
 		}
-	      } else {
-		cover(75);
-		val >>= -shift2;
-	      }
-	      if (qStyle == 0) {
-		cover(76);
-		if (tileComp->transform == 0) {
-		  val &= -1 << (fracBits - tileComp->prec);
+		if (qStyle == 0) {
+		  cover(76);
+		  if (tileComp->transform == 0) {
+		    val &= -1 << (fracBits - tileComp->prec);
+		  }
+		} else {
+		  cover(77);
+		  val = (int)((double)val * mu);
 		}
-	      } else {
-		cover(77);
-		val = (int)((double)val * mu);
 	      }
+	      *coeff = val;
 	    }
-	    *coeff = val;
 	  }
+	  ++cb;
 	}
-	++cb;
       }
     }
   }
 
   //----- inverse transform
 
-  // compute the subband bounds:
-  //    0   nx1  nx2
-  //    |    |    |
-  //    v    v    v
-  //   +----+----+
-  //   | LL | HL | <- 0
-  //   +----+----+
-  //   | LH | HH | <- ny1
-  //   +----+----+
-  //               <- ny2
-  nx1 = precinct->subbands[1].x1 - precinct->subbands[1].x0;
-  nx2 = nx1 + precinct->subbands[0].x1 - precinct->subbands[0].x0;
-  ny1 = precinct->subbands[0].y1 - precinct->subbands[0].y0;
-  ny2 = ny1 + precinct->subbands[1].y1 - precinct->subbands[1].y0;
-
   // horizontal (row) transforms
-  if (r == tileComp->nDecompLevels) {
-    offset = 3 + (tileComp->x0 & 1);
-  } else {
-    offset = 3 + (tileComp->resLevels[r+1].x0 & 1);
-  }
+  offset = 3 + (resLevel->x0 & 1);
   for (y = 0, dataPtr = tileComp->data; y < ny2; ++y, dataPtr += tileComp->w) {
-    if (precinct->subbands[0].x0 == precinct->subbands[1].x0) {
+    if (resLevel->bx0[0] == resLevel->bx0[1]) {
       // fetch LL/LH
       for (x = 0, bufPtr = tileComp->buf + offset;
 	   x < nx1;
@@ -3002,13 +3186,9 @@ void JPXStream::inverseTransformLevel(JPXTileComp *tileComp,
   }
 
   // vertical (column) transforms
-  if (r == tileComp->nDecompLevels) {
-    offset = 3 + (tileComp->y0 & 1);
-  } else {
-    offset = 3 + (tileComp->resLevels[r+1].y0 & 1);
-  }
+  offset = 3 + (resLevel->y0 & 1);
   for (x = 0, dataPtr = tileComp->data; x < nx2; ++x, ++dataPtr) {
-    if (precinct->subbands[1].y0 == precinct->subbands[0].y0) {
+    if (resLevel->by0[0] == resLevel->by0[1]) {
       // fetch LL/HL
       for (y = 0, bufPtr = tileComp->buf + offset;
 	   y < ny1;
@@ -3144,7 +3324,7 @@ void JPXStream::inverseTransform1D(JPXTileComp *tileComp, int *data,
 // converts fixed point samples back to integers.
 GBool JPXStream::inverseMultiCompAndDC(JPXTile *tile) {
   JPXTileComp *tileComp;
-  int coeff, d0, d1, d2, t, minVal, maxVal, zeroVal;
+  int coeff, d0, d1, d2, t, minVal, maxVal, zeroVal, shift, rounding;
   int *dataPtr;
   Guint j, comp, x, y;
 
@@ -3229,12 +3409,14 @@ GBool JPXStream::inverseMultiCompAndDC(JPXTile *tile) {
       maxVal = (1 << tileComp->prec) - 1;
       zeroVal = 1 << (tileComp->prec - 1);
       dataPtr = tileComp->data;
+      shift = fracBits - tileComp->prec;
+      rounding = 1 << (shift - 1);
       for (y = 0; y < tileComp->h; ++y) {
 	for (x = 0; x < tileComp->w; ++x) {
 	  coeff = *dataPtr;
 	  if (tileComp->transform == 0) {
 	    cover(112);
-	    coeff >>= fracBits - tileComp->prec;
+	    coeff = (coeff + rounding) >> shift;
 	  }
 	  coeff += zeroVal;
 	  if (coeff < 0) {

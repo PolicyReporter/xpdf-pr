@@ -11,11 +11,13 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include "Lexer.h"
+
+//------------------------------------------------------------------------
+
+// Max number of nested objects.  This is used to catch infinite loops
+// in the object structure.
+#define objectRecursionLimit 500
 
 //------------------------------------------------------------------------
 // Parser
@@ -37,6 +39,9 @@ public:
 		 Guchar *fileKey = NULL,
 		 CryptAlgorithm encAlgorithm = cryptRC4, int keyLength = 0,
 		 int objNum = 0, int objGen = 0, int recursion = 0);
+
+  // Get stream index (for arrays of streams).
+  int getStreamIndex() { return lexer->getStreamIndex(); }
 
   // Get stream.
   Stream *getStream() { return lexer->getStream(); }
