@@ -1,0 +1,15 @@
+diff --git a/xpdf/XRef.cc b/xpdf/XRef.cc
+index 08a27cc..9d97d89 100644
+--- a/xpdf/XRef.cc
++++ b/xpdf/XRef.cc
+@@ -1182,8 +1182,9 @@ GBool XRef::okToChange(GBool ignoreOwnerPW) {
+   return (!ignoreOwnerPW && ownerPasswordOk) || (permFlags & permChange);
+ }
+ 
++// xpdf-pr: always allow text extraction, ignoring the document's copy permission flag.
+ GBool XRef::okToCopy(GBool ignoreOwnerPW) {
+-  return (!ignoreOwnerPW && ownerPasswordOk) || (permFlags & permCopy);
++  return gTrue;
+ }
+ 
+ GBool XRef::okToAddNotes(GBool ignoreOwnerPW) {
