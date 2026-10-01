@@ -5,6 +5,7 @@ on:
   # Triggers the workflow on push or pull request events but only for the master branch
   push:
     branches: [ master ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ master ]
 
@@ -13,18 +14,41 @@ on:
 
 jobs:
   build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    # One native runner per architecture: packages are built with the target distro, never cross-compiled.
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
 
     steps:
     - uses: actions/checkout@v6
-    - name: Dependencies
-      run: sudo apt install libfreetype6-dev libmotif-dev libpng-dev
-    - name: autoconf
-      run: autoconf
-    - name: configure
-      run: ./configure --enable-multithreaded --enable-cmyk --with-freetype2-includes="/usr/include/freetype2/"
-    - name: make
-      run: make -j2
-    - name: make install
-      run: sudo make install
+
+    - name: Build .deb
+      run: ARCHS=${{ matrix.arch }} scripts/build-deb.sh
+
+    - uses: actions/upload-artifact@v6
+      with:
+        name: xpdf-pr-${{ matrix.arch }}
+        path: dist/*.deb
+
+  release:
+    # Attaches both .deb files to new releases with v* tag.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/download-artifact@v7
+      with:
+        path: artifacts
+        merge-multiple: true
+    - name: Publish GitHub release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: scripts/create-release.sh "${GITHUB_REF_NAME}" artifacts/*.deb
