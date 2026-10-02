@@ -19,6 +19,8 @@ add_subdirectory(fofi)
 add_subdirectory(splash)
 add_subdirectory(xpdf)
 add_subdirectory(xpdf-qt)
+# xpdf-pr: pdftohtml 0.39, used by policyr.
+add_subdirectory(pdftohtml)
 
 if (NOT HAVE_FREETYPE_H)
   message(WARNING "Couldn't find FreeType -- will not build pdftoppm, pdftopng, pdftohtml, or xpdf.")

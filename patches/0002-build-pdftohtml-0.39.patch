@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3227d42..2d1d611 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -19,6 +19,8 @@ add_subdirectory(fofi)
+ add_subdirectory(splash)
+ add_subdirectory(xpdf)
+ add_subdirectory(xpdf-qt)
++# xpdf-pr: pdftohtml 0.39, used by policyr.
++add_subdirectory(pdftohtml)
+ 
+ if (NOT HAVE_FREETYPE_H)
+   message(WARNING "Couldn't find FreeType -- will not build pdftoppm, pdftopng, pdftohtml, or xpdf.")
