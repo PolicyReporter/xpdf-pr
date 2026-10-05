@@ -21,6 +21,8 @@ add_subdirectory(xpdf)
 add_subdirectory(xpdf-qt)
 # xpdf-pr: pdftohtml 0.39, used by policyr.
 add_subdirectory(pdftohtml)
+# xpdf-pr: pdftotext with the xpdf 3.04 text extractor, used by bumblebee and policyr.
+add_subdirectory(pdftotext)
 
 if (NOT HAVE_FREETYPE_H)
   message(WARNING "Couldn't find FreeType -- will not build pdftoppm, pdftopng, pdftohtml, or xpdf.")

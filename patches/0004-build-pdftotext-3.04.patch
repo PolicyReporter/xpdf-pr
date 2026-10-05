@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2d1d611..8e1fbae 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -21,6 +21,8 @@ add_subdirectory(xpdf)
+ add_subdirectory(xpdf-qt)
+ # xpdf-pr: pdftohtml 0.39, used by policyr.
+ add_subdirectory(pdftohtml)
++# xpdf-pr: pdftotext with the xpdf 3.04 text extractor, used by bumblebee and policyr.
++add_subdirectory(pdftotext)
+ 
+ if (NOT HAVE_FREETYPE_H)
+   message(WARNING "Couldn't find FreeType -- will not build pdftoppm, pdftopng, pdftohtml, or xpdf.")
