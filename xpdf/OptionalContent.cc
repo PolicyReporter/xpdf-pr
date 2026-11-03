@@ -8,10 +8,7 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
+#include "gmempp.h"
 #include "GString.h"
 #include "GList.h"
 #include "Error.h"
@@ -41,10 +38,10 @@
 
 OptionalContent::OptionalContent(PDFDoc *doc) {
   Object *ocProps;
-  Object ocgList, defView, obj1, obj2;
+  Object ocgList, defView, uad, obj1, obj2, obj3, obj4;
   Ref ref1;
   OptionalContentGroup *ocg;
-  int i;
+  int i, j;
 
   xref = doc->getXRef();
   ocgs = new GList();
@@ -69,7 +66,32 @@ OptionalContent::OptionalContent(PDFDoc *doc) {
       //----- read the default viewing OCCD
       if (ocProps->dictLookup("D", &defView)->isDict()) {
 
-	//----- initial state
+	//----- read the usage app dicts
+	if (defView.dictLookup("AS", &obj1)->isArray()) {
+	  for (i = 0; i < obj1.arrayGetLength(); ++i) {
+	    if (obj1.arrayGet(i, &uad)->isDict()) {
+	      if (uad.dictLookup("Event", &obj2)->isName("View")) {
+		if (uad.dictLookup("OCGs", &obj3)->isArray()) {
+		  for (j = 0; j < obj3.arrayGetLength(); ++j) {
+		    if (obj3.arrayGetNF(j, &obj4)->isRef()) {
+		      ref1 = obj4.getRef();
+		      if ((ocg = findOCG(&ref1))) {
+			ocg->setInViewUsageAppDict();
+		      }
+		    }
+		    obj4.free();
+		  }
+		}
+		obj3.free();
+	      }
+	      obj2.free();
+	    }
+	    uad.free();
+	  }
+	}
+	obj1.free();
+
+	//----- initial state from OCCD
 	if (defView.dictLookup("OFF", &obj1)->isArray()) {
 	  for (i = 0; i < obj1.arrayGetLength(); ++i) {
 	    if (obj1.arrayGetNF(i, &obj2)->isRef()) {
@@ -85,6 +107,15 @@ OptionalContent::OptionalContent(PDFDoc *doc) {
 	  }
 	}
 	obj1.free();
+
+	//----- initial state from OCG usage dict
+	for (i = 0; i < ocgs->getLength(); ++i) {
+	  ocg = (OptionalContentGroup *)ocgs->get(i);
+	  if (ocg->getInViewUsageAppDict() &&
+	      ocg->getViewState() != ocUsageUnset) {
+	    ocg->setState(ocg->getViewState() == ocUsageOn);
+	  }
+	}
 
 	//----- display order
 	if (defView.dictLookup("Order", &obj1)->isArray()) {
@@ -137,6 +168,7 @@ GBool OptionalContent::evalOCObject(Object *obj, GBool *visible) {
   int policy;
   Ref ref;
   Object obj2, obj3, obj4, obj5;
+  GBool gotOCG;
   int i;
 
   if (obj->isNull()) {
@@ -189,33 +221,39 @@ GBool OptionalContent::evalOCObject(Object *obj, GBool *visible) {
 	obj2.free();
 	return gFalse;
       }
+      gotOCG = gFalse;
       for (i = 0; i < obj4.arrayGetLength(); ++i) {
 	obj4.arrayGetNF(i, &obj5);
 	if (obj5.isRef()) {
 	  ref = obj5.getRef();
-	  if (!(ocg = findOCG(&ref))) {
-	    obj5.free();
-	    obj4.free();
-	    obj3.free();
-	    obj2.free();
-	    return gFalse;
-	  }
-	  switch (policy) {
-	  case ocPolicyAllOn:
-	    *visible = *visible && ocg->getState();
-	    break;
-	  case ocPolicyAnyOn:
-	    *visible = *visible || ocg->getState();
-	    break;
-	  case ocPolicyAnyOff:
-	    *visible = *visible || !ocg->getState();
-	    break;
-	  case ocPolicyAllOff:
-	    *visible = *visible && !ocg->getState();
-	    break;
+	  if ((ocg = findOCG(&ref))) {
+	    gotOCG = gTrue;
+	    switch (policy) {
+	    case ocPolicyAllOn:
+	      *visible = *visible && ocg->getState();
+	      break;
+	    case ocPolicyAnyOn:
+	      *visible = *visible || ocg->getState();
+	      break;
+	    case ocPolicyAnyOff:
+	      *visible = *visible || !ocg->getState();
+	      break;
+	    case ocPolicyAllOff:
+	      *visible = *visible && !ocg->getState();
+	      break;
+	    }
 	  }
 	}
 	obj5.free();
+      }
+      if (!gotOCG) {
+	// if the "OCGs" array is "empty or contains references only
+	// to null or deleted objects", this OCMD doesn't have any
+	// effect
+	obj4.free();
+	obj3.free();
+	obj2.free();
+	return gFalse;
       }
       obj4.free();
     }
@@ -341,6 +379,7 @@ OptionalContentGroup::OptionalContentGroup(Ref *refA, TextString *nameA,
   viewState = viewStateA;
   printState = printStateA;
   state = gTrue;
+  inViewUsageAppDict = gFalse;
 }
 
 OptionalContentGroup::~OptionalContentGroup() {
@@ -418,6 +457,7 @@ OCDisplayNode *OCDisplayNode::parse(Object *obj, OptionalContent *oc,
 OCDisplayNode::OCDisplayNode() {
   name = new TextString();
   ocg = NULL;
+  parent = NULL;
   children = NULL;
 }
 
@@ -438,21 +478,31 @@ void OCDisplayNode::addChild(OCDisplayNode *child) {
     children = new GList();
   }
   children->append(child);
+  child->parent = this;
 }
 
 void OCDisplayNode::addChildren(GList *childrenA) {
+  int i;
+
   if (!children) {
     children = new GList();
   }
   children->append(childrenA);
+  for (i = 0; i < childrenA->getLength(); ++i) {
+    ((OCDisplayNode *)childrenA->get(i))->parent = this;
+  }
   delete childrenA;
 }
 
 GList *OCDisplayNode::takeChildren() {
   GList *childrenA;
+  int i;
 
   childrenA = children;
   children = NULL;
+  for (i = 0; i < childrenA->getLength(); ++i) {
+    ((OCDisplayNode *)childrenA->get(i))->parent = NULL;
+  }
   return childrenA;
 }
 

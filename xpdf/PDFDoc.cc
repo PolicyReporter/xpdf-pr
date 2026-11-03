@@ -8,10 +8,6 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -19,11 +15,14 @@
 #ifdef _WIN32
 #  include <windows.h>
 #endif
+#include "gmempp.h"
 #include "GString.h"
+#include "gfile.h"
 #include "config.h"
 #include "GlobalParams.h"
 #include "Page.h"
 #include "Catalog.h"
+#include "Annot.h"
 #include "Stream.h"
 #include "XRef.h"
 #include "Link.h"
@@ -33,6 +32,7 @@
 #include "Lexer.h"
 #include "Parser.h"
 #include "SecurityHandler.h"
+#include "UTF8.h"
 #ifndef DISABLE_OUTLINE
 #include "Outline.h"
 #endif
@@ -43,6 +43,15 @@
 
 #define headerSearchSize 1024	// read this many bytes at beginning of
 				//   file to look for '%PDF'
+
+// Avoid sharing files with child processes on Windows, where sharing
+// can cause problems.
+#ifdef _WIN32
+#  define fopenReadMode "rbN"
+#  define wfopenReadMode L"rbN"
+#else
+#  define fopenReadMode "rb"
+#endif
 
 //------------------------------------------------------------------------
 // PDFDoc
@@ -56,19 +65,7 @@ PDFDoc::PDFDoc(GString *fileNameA, GString *ownerPassword,
   int n, i;
 #endif
 
-  ok = gFalse;
-  errCode = errNone;
-
-  core = coreA;
-
-  file = NULL;
-  str = NULL;
-  xref = NULL;
-  catalog = NULL;
-#ifndef DISABLE_OUTLINE
-  outline = NULL;
-#endif
-  optContent = NULL;
+  init(coreA);
 
   fileName = fileNameA;
 #ifdef _WIN32
@@ -85,18 +82,18 @@ PDFDoc::PDFDoc(GString *fileNameA, GString *ownerPassword,
   // try to open file
   fileName2 = NULL;
 #ifdef VMS
-  if (!(file = fopen(fileName1->getCString(), "rb", "ctx=stm"))) {
+  if (!(file = fopen(fileName1->getCString(), fopenReadMode, "ctx=stm"))) {
     error(errIO, -1, "Couldn't open file '{0:t}'", fileName1);
     errCode = errOpenFile;
     return;
   }
 #else
-  if (!(file = fopen(fileName1->getCString(), "rb"))) {
+  if (!(file = fopen(fileName1->getCString(), fopenReadMode))) {
     fileName2 = fileName->copy();
     fileName2->lowerCase();
-    if (!(file = fopen(fileName2->getCString(), "rb"))) {
+    if (!(file = fopen(fileName2->getCString(), fopenReadMode))) {
       fileName2->upperCase();
-      if (!(file = fopen(fileName2->getCString(), "rb"))) {
+      if (!(file = fopen(fileName2->getCString(), fopenReadMode))) {
 	error(errIO, -1, "Couldn't open file '{0:t}'", fileName);
 	delete fileName2;
 	errCode = errOpenFile;
@@ -121,37 +118,32 @@ PDFDoc::PDFDoc(wchar_t *fileNameA, int fileNameLen, GString *ownerPassword,
   Object obj;
   int i;
 
-  ok = gFalse;
-  errCode = errNone;
+  init(coreA);
 
-  core = coreA;
-
-  file = NULL;
-  str = NULL;
-  xref = NULL;
-  catalog = NULL;
-#ifndef DISABLE_OUTLINE
-  outline = NULL;
-#endif
-  optContent = NULL;
+  // handle a Windows shortcut
+  wchar_t wPath[winMaxLongPath + 1];
+  int n = fileNameLen < winMaxLongPath ? fileNameLen : winMaxLongPath;
+  memcpy(wPath, fileNameA, n * sizeof(wchar_t));
+  wPath[n] = L'\0';
+  readWindowsShortcut(wPath, winMaxLongPath + 1);
+  int wPathLen = (int)wcslen(wPath);
 
   // save both Unicode and 8-bit copies of the file name
   fileName = new GString();
-  fileNameU = (wchar_t *)gmallocn(fileNameLen + 1, sizeof(wchar_t));
-  for (i = 0; i < fileNameLen; ++i) {
+  fileNameU = (wchar_t *)gmallocn(wPathLen + 1, sizeof(wchar_t));
+  memcpy(fileNameU, wPath, (wPathLen + 1) * sizeof(wchar_t));
+  for (i = 0; i < wPathLen; ++i) {
     fileName->append((char)fileNameA[i]);
-    fileNameU[i] = fileNameA[i];
   }
-  fileNameU[fileNameLen] = L'\0';
 
   // try to open file
   // NB: _wfopen is only available in NT
   version.dwOSVersionInfoSize = sizeof(version);
   GetVersionEx(&version);
   if (version.dwPlatformId == VER_PLATFORM_WIN32_NT) {
-    file = _wfopen(fileNameU, L"rb");
+    file = _wfopen(fileNameU, wfopenReadMode);
   } else {
-    file = fopen(fileName->getCString(), "rb");
+    file = fopen(fileName->getCString(), fopenReadMode);
   }
   if (!file) {
     error(errIO, -1, "Couldn't open file '{0:t}'", fileName);
@@ -167,15 +159,70 @@ PDFDoc::PDFDoc(wchar_t *fileNameA, int fileNameLen, GString *ownerPassword,
 }
 #endif
 
+PDFDoc::PDFDoc(char *fileNameA, GString *ownerPassword,
+	       GString *userPassword, PDFCore *coreA) {
+#ifdef _WIN32
+  OSVERSIONINFO version;
+#endif
+  Object obj;
+#ifdef _WIN32
+  Unicode u;
+  int i, j;
+#endif
+
+  init(coreA);
+
+  fileName = new GString(fileNameA);
+
+#if defined(_WIN32)
+  wchar_t wPath[winMaxLongPath + 1];
+  i = 0;
+  j = 0;
+  while (j < winMaxLongPath && getUTF8(fileName, &i, &u)) {
+    wPath[j++] = (wchar_t)u;
+  }
+  wPath[j] = L'\0';
+  readWindowsShortcut(wPath, winMaxLongPath + 1);
+  int wPathLen = (int)wcslen(wPath);
+
+  fileNameU = (wchar_t *)gmallocn(wPathLen + 1, sizeof(wchar_t));
+  memcpy(fileNameU, wPath, (wPathLen + 1) * sizeof(wchar_t));
+
+  // NB: _wfopen is only available in NT
+  version.dwOSVersionInfoSize = sizeof(version);
+  GetVersionEx(&version);
+  if (version.dwPlatformId == VER_PLATFORM_WIN32_NT) {
+    file = _wfopen(fileNameU, wfopenReadMode);
+  } else {
+    file = fopen(fileName->getCString(), fopenReadMode);
+  }
+#elif defined(VMS)
+  file = fopen(fileName->getCString(), fopenReadMode, "ctx=stm");
+#else
+  file = fopen(fileName->getCString(), fopenReadMode);
+#endif
+
+  if (!file) {
+    error(errIO, -1, "Couldn't open file '{0:t}'", fileName);
+    errCode = errOpenFile;
+    return;
+  }
+
+  // create stream
+  obj.initNull();
+  str = new FileStream(file, 0, gFalse, 0, &obj);
+
+  ok = setup(ownerPassword, userPassword);
+}
+
 PDFDoc::PDFDoc(BaseStream *strA, GString *ownerPassword,
 	       GString *userPassword, PDFCore *coreA) {
 #ifdef _WIN32
   int n, i;
 #endif
 
-  ok = gFalse;
-  errCode = errNone;
-  core = coreA;
+  init(coreA);
+
   if (strA->getFileName()) {
     fileName = strA->getFileName()->copy();
 #ifdef _WIN32
@@ -192,18 +239,27 @@ PDFDoc::PDFDoc(BaseStream *strA, GString *ownerPassword,
     fileNameU = NULL;
 #endif
   }
-  file = NULL;
   str = strA;
+  ok = setup(ownerPassword, userPassword);
+}
+
+void PDFDoc::init(PDFCore *coreA) {
+  ok = gFalse;
+  errCode = errNone;
+  core = coreA;
+  file = NULL;
+  str = NULL;
   xref = NULL;
   catalog = NULL;
+  annots = NULL;
 #ifndef DISABLE_OUTLINE
   outline = NULL;
 #endif
   optContent = NULL;
-  ok = setup(ownerPassword, userPassword);
 }
 
 GBool PDFDoc::setup(GString *ownerPassword, GString *userPassword) {
+
   str->reset();
 
   // check header
@@ -268,6 +324,9 @@ GBool PDFDoc::setup2(GString *ownerPassword, GString *userPassword,
     return gFalse;
   }
 
+  // initialize the Annots object
+  annots = new Annots(this);
+
   return gTrue;
 }
 
@@ -280,6 +339,9 @@ PDFDoc::~PDFDoc() {
     delete outline;
   }
 #endif
+  if (annots) {
+    delete annots;
+  }
   if (catalog) {
     delete catalog;
   }
@@ -373,7 +435,7 @@ GBool PDFDoc::checkEncryption(GString *ownerPassword, GString *userPassword) {
   return ret;
 }
 
-void PDFDoc::displayPage(OutputDev *out, int page,
+void PDFDoc::displayPage(OutputDev *out, LocalParams *localParams, int page,
 			 double hDPI, double vDPI, int rotate,
 			 GBool useMediaBox, GBool crop, GBool printing,
 			 GBool (*abortCheckCbk)(void *data),
@@ -381,12 +443,13 @@ void PDFDoc::displayPage(OutputDev *out, int page,
   if (globalParams->getPrintCommands()) {
     printf("***** page %d *****\n", page);
   }
-  catalog->getPage(page)->display(out, hDPI, vDPI,
+  catalog->getPage(page)->display(out, localParams, hDPI, vDPI,
 				  rotate, useMediaBox, crop, printing,
 				  abortCheckCbk, abortCheckCbkData);
 }
 
-void PDFDoc::displayPages(OutputDev *out, int firstPage, int lastPage,
+void PDFDoc::displayPages(OutputDev *out, LocalParams *localParams,
+			  int firstPage, int lastPage,
 			  double hDPI, double vDPI, int rotate,
 			  GBool useMediaBox, GBool crop, GBool printing,
 			  GBool (*abortCheckCbk)(void *data),
@@ -394,24 +457,31 @@ void PDFDoc::displayPages(OutputDev *out, int firstPage, int lastPage,
   int page;
 
   for (page = firstPage; page <= lastPage; ++page) {
-    displayPage(out, page, hDPI, vDPI, rotate, useMediaBox, crop, printing,
+    if (globalParams->getPrintStatusInfo()) {
+      fflush(stderr);
+      printf("[processing page %d]\n", page);
+      fflush(stdout);
+    }
+    displayPage(out, localParams, page, hDPI, vDPI, rotate,
+		useMediaBox, crop, printing,
 		abortCheckCbk, abortCheckCbkData);
     catalog->doneWithPage(page);
   }
 }
 
-void PDFDoc::displayPageSlice(OutputDev *out, int page,
-			      double hDPI, double vDPI, int rotate,
+void PDFDoc::displayPageSlice(OutputDev *out, LocalParams *localParams,
+			      int page, double hDPI, double vDPI, int rotate,
 			      GBool useMediaBox, GBool crop, GBool printing,
 			      int sliceX, int sliceY, int sliceW, int sliceH,
 			      GBool (*abortCheckCbk)(void *data),
 			      void *abortCheckCbkData) {
-  catalog->getPage(page)->displaySlice(out, hDPI, vDPI,
+  catalog->getPage(page)->displaySlice(out, localParams, hDPI, vDPI,
 				       rotate, useMediaBox, crop,
 				       sliceX, sliceY, sliceW, sliceH,
 				       printing,
 				       abortCheckCbk, abortCheckCbkData);
 }
+
 
 Links *PDFDoc::getLinks(int page) {
   return catalog->getPage(page)->getLinks();
@@ -420,6 +490,47 @@ Links *PDFDoc::getLinks(int page) {
 void PDFDoc::processLinks(OutputDev *out, int page) {
   catalog->getPage(page)->processLinks(out);
 }
+
+#ifndef DISABLE_OUTLINE
+int PDFDoc::getOutlineTargetPage(OutlineItem *outlineItem) {
+  LinkAction *action;
+  LinkActionKind kind;
+  LinkDest *dest;
+  GString *namedDest;
+  Ref pageRef;
+  int pg;
+
+  if (outlineItem->pageNum >= 0) {
+    return outlineItem->pageNum;
+  }
+  if (!(action = outlineItem->getAction())) {
+    outlineItem->pageNum = 0;
+    return 0;
+  }
+  kind = action->getKind();
+  if (kind != actionGoTo) {
+    outlineItem->pageNum = 0;
+    return 0;
+  }
+  if ((dest = ((LinkGoTo *)action)->getDest())) {
+    dest = dest->copy();
+  } else if ((namedDest = ((LinkGoTo *)action)->getNamedDest())) {
+    dest = findDest(namedDest);
+  }
+  pg = 0;
+  if (dest) {
+    if (dest->isPageRef()) {
+      pageRef = dest->getPageRef();
+      pg = findPage(pageRef.num, pageRef.gen);
+    } else {
+      pg = dest->getPageNum();
+    }
+    delete dest;
+  }
+  outlineItem->pageNum = pg;
+  return pg;
+}
+#endif
 
 GBool PDFDoc::isLinearized() {
   Parser *parser;
@@ -470,7 +581,7 @@ GBool PDFDoc::saveAs(GString *name) {
   return gTrue;
 }
 
-GBool PDFDoc::saveEmbeddedFile(int idx, char *path) {
+GBool PDFDoc::saveEmbeddedFile(int idx, const char *path) {
   FILE *f;
   GBool ret;
 
@@ -482,12 +593,24 @@ GBool PDFDoc::saveEmbeddedFile(int idx, char *path) {
   return ret;
 }
 
+GBool PDFDoc::saveEmbeddedFileU(int idx, const char *path) {
+  FILE *f;
+  GBool ret;
+
+  if (!(f = openFile(path, "wb"))) {
+    return gFalse;
+  }
+  ret = saveEmbeddedFile2(idx, f);
+  fclose(f);
+  return ret;
+}
+
 #ifdef _WIN32
-GBool PDFDoc::saveEmbeddedFile(int idx, wchar_t *path, int pathLen) {
+GBool PDFDoc::saveEmbeddedFile(int idx, const wchar_t *path, int pathLen) {
   FILE *f;
   OSVERSIONINFO version;
-  wchar_t path2w[_MAX_PATH + 1];
-  char path2c[_MAX_PATH + 1];
+  wchar_t path2w[winMaxLongPath + 1];
+  char path2c[MAX_PATH + 1];
   int i;
   GBool ret;
 
@@ -495,13 +618,13 @@ GBool PDFDoc::saveEmbeddedFile(int idx, wchar_t *path, int pathLen) {
   version.dwOSVersionInfoSize = sizeof(version);
   GetVersionEx(&version);
   if (version.dwPlatformId == VER_PLATFORM_WIN32_NT) {
-    for (i = 0; i < pathLen && i < _MAX_PATH; ++i) {
+    for (i = 0; i < pathLen && i < winMaxLongPath; ++i) {
       path2w[i] = path[i];
     }
     path2w[i] = 0;
     f = _wfopen(path2w, L"wb");
   } else {
-    for (i = 0; i < pathLen && i < _MAX_PATH; ++i) {
+    for (i = 0; i < pathLen && i < MAX_PATH; ++i) {
       path2c[i] = (char)path[i];
     }
     path2c[i] = 0;

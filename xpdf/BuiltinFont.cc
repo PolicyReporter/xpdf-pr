@@ -8,13 +8,10 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdlib.h>
 #include <string.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "FontEncodingTables.h"
 #include "BuiltinFont.h"
 
@@ -50,6 +47,7 @@ GBool BuiltinFontWidths::getWidth(const char *name, Gushort *width) {
       return gTrue;
     }
   }
+  *width = 0;
   return gFalse;
 }
 

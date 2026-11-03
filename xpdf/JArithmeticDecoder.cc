@@ -8,10 +8,7 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
+#include "gmempp.h"
 #include "Object.h"
 #include "Stream.h"
 #include "JArithmeticDecoder.h"
@@ -47,7 +44,7 @@ void JArithmeticDecoderStats::copyFrom(JArithmeticDecoderStats *stats) {
 }
 
 void JArithmeticDecoderStats::setEntry(Guint cx, int i, int mps) {
-  cxTab[cx] = (i << 1) + mps;
+  cxTab[cx] = (Guchar)((i << 1) + mps);
 }
 
 //------------------------------------------------------------------------
@@ -92,17 +89,14 @@ JArithmeticDecoder::JArithmeticDecoder() {
   dataLen = 0;
   limitStream = gFalse;
   nBytesRead = 0;
-  readBuf = -1;
+  readBufNext = 0;
+  readBufLength = 0;
 }
 
 inline Guint JArithmeticDecoder::readByte() {
-  Guint x;
-
   if (limitStream) {
-    if (readBuf >= 0) {
-      x = (Guint)readBuf;
-      readBuf = -1;
-      return x;
+    if (readBufNext < readBufLength) {
+      return readBuf[readBufNext++];
     }
     --dataLen;
     if (dataLen < 0) {
@@ -170,16 +164,22 @@ void JArithmeticDecoder::restart(int dataLenA) {
 
 void JArithmeticDecoder::cleanup() {
   if (limitStream) {
-    // This saves one extra byte of data from the end of packet i, to
-    // be used in packet i+1.  It's not clear from the JPEG 2000 spec
-    // exactly how this should work, but this kludge does seem to fix
-    // decode of some problematic JPEG 2000 streams.  It may actually
-    // be necessary to buffer an arbitrary number of bytes (not just
-    // one byte), but I haven't run into that case yet.
+    // This saves up to sizeof(readBuf) extra bytes of data from the
+    // end of packet i, to be used in packet i+1. It's not clear from
+    // the JPEG 2000 spec exactly how this should work, but this
+    // kludge does seem to fix decode of some problematic JPEG 2000
+    // streams. The buffer may need to larger, but I haven't run into
+    // that case. (And the buffer was originally just one byte, which
+    // works for almost all cases.)
+    readBufLength = 0;
     while (dataLen > 0) {
-      readBuf = -1;
-      readBuf = readByte();
+      if (readBufLength < (int)sizeof(readBuf)) {
+	readBuf[readBufLength++] = (Guchar)str->getChar();
+	++nBytesRead;
+      }
+      --dataLen;
     }
+    readBufNext = 0;
   }
 }
 
@@ -201,13 +201,13 @@ int JArithmeticDecoder::decodeBit(Guint context,
       if (a < qe) {
 	bit = 1 - mpsCX;
 	if (switchTab[iCX]) {
-	  stats->cxTab[context] = (nlpsTab[iCX] << 1) | (1 - mpsCX);
+	  stats->cxTab[context] = (Guchar)((nlpsTab[iCX] << 1) | (1 - mpsCX));
 	} else {
-	  stats->cxTab[context] = (nlpsTab[iCX] << 1) | mpsCX;
+	  stats->cxTab[context] = (Guchar)((nlpsTab[iCX] << 1) | mpsCX);
 	}
       } else {
 	bit = mpsCX;
-	stats->cxTab[context] = (nmpsTab[iCX] << 1) | mpsCX;
+	stats->cxTab[context] = (Guchar)((nmpsTab[iCX] << 1) | mpsCX);
       }
       // RENORMD
       do {
@@ -224,13 +224,13 @@ int JArithmeticDecoder::decodeBit(Guint context,
     // LPS_EXCHANGE
     if (a < qe) {
       bit = mpsCX;
-      stats->cxTab[context] = (nmpsTab[iCX] << 1) | mpsCX;
+      stats->cxTab[context] = (Guchar)((nmpsTab[iCX] << 1) | mpsCX);
     } else {
       bit = 1 - mpsCX;
       if (switchTab[iCX]) {
-	stats->cxTab[context] = (nlpsTab[iCX] << 1) | (1 - mpsCX);
+	stats->cxTab[context] = (Guchar)((nlpsTab[iCX] << 1) | (1 - mpsCX));
       } else {
-	stats->cxTab[context] = (nlpsTab[iCX] << 1) | mpsCX;
+	stats->cxTab[context] = (Guchar)((nlpsTab[iCX] << 1) | mpsCX);
       }
     }
     a = qe;

@@ -8,15 +8,12 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "GList.h"
 #include "Object.h"
 #include "Dict.h"
@@ -40,7 +37,8 @@ Function::Function() {
 Function::~Function() {
 }
 
-Function *Function::parse(Object *funcObj, int recursion) {
+Function *Function::parse(Object *funcObj, int expectedInputs,
+			  int expectedOutputs, int recursion) {
   Function *func;
   Dict *dict;
   int funcType;
@@ -56,7 +54,11 @@ Function *Function::parse(Object *funcObj, int recursion) {
   } else if (funcObj->isDict()) {
     dict = funcObj->getDict();
   } else if (funcObj->isName("Identity")) {
-    return new IdentityFunction();
+    if (expectedInputs != expectedOutputs) {
+      error(errSyntaxError, -1, "Invalid use of identity function");
+      return NULL;
+    }
+    return new IdentityFunction(expectedInputs);
   } else {
     error(errSyntaxError, -1, "Expected function dictionary or stream");
     return NULL;
@@ -75,7 +77,8 @@ Function *Function::parse(Object *funcObj, int recursion) {
   } else if (funcType == 2) {
     func = new ExponentialFunction(funcObj, dict);
   } else if (funcType == 3) {
-    func = new StitchingFunction(funcObj, dict, recursion);
+    func = new StitchingFunction(funcObj, dict, expectedInputs,
+				 expectedOutputs, recursion);
   } else if (funcType == 4) {
     func = new PostScriptFunction(funcObj, dict);
   } else {
@@ -83,6 +86,14 @@ Function *Function::parse(Object *funcObj, int recursion) {
     return NULL;
   }
   if (!func->isOk()) {
+    delete func;
+    return NULL;
+  }
+
+  if (func->getInputSize() != expectedInputs ||
+      (expectedOutputs >= 0 && func->getOutputSize() != expectedOutputs)) {
+    error(errSyntaxError, -1,
+	  "Incorrect number of function inputs or outputs");
     delete func;
     return NULL;
   }
@@ -168,14 +179,12 @@ GBool Function::init(Dict *dict) {
 // IdentityFunction
 //------------------------------------------------------------------------
 
-IdentityFunction::IdentityFunction() {
+IdentityFunction::IdentityFunction(int nInputs) {
   int i;
 
-  // fill these in with arbitrary values just in case they get used
-  // somewhere
-  m = funcMaxInputs;
-  n = funcMaxOutputs;
-  for (i = 0; i < funcMaxInputs; ++i) {
+  m = n = nInputs;
+  // domain info shouldn't be used anywhere
+  for (i = 0; i < nInputs; ++i) {
     domain[i][0] = 0;
     domain[i][1] = 1;
   }
@@ -188,7 +197,7 @@ IdentityFunction::~IdentityFunction() {
 void IdentityFunction::transform(double *in, double *out) {
   int i;
 
-  for (i = 0; i < funcMaxOutputs; ++i) {
+  for (i = 0; i < m; ++i) {
     out[i] = in[i];
   }
 }
@@ -346,8 +355,13 @@ SampledFunction::SampledFunction(Object *funcObj, Dict *dict) {
 
   //----- samples
   nSamples = n;
-  for (i = 0; i < m; ++i)
+  for (i = 0; i < m; ++i) {
+    if (nSamples > INT_MAX / sampleSize[i]) {
+      error(errSyntaxError, -1, "Integer overflow in sampled function setup");
+      goto err1;
+    }
     nSamples *= sampleSize[i];
+  }
   samples = (double *)gmallocn(nSamples, sizeof(double));
   buf = 0;
   bits = 0;
@@ -407,7 +421,7 @@ SampledFunction::~SampledFunction() {
 }
 
 SampledFunction::SampledFunction(SampledFunction *func) {
-  memcpy(this, func, sizeof(SampledFunction));
+  memcpy((void *)this, (void *)func, sizeof(SampledFunction));
   idxOffset = (int *)gmallocn(1 << m, sizeof(int));
   memcpy(idxOffset, func->idxOffset, (1 << m) * (int)sizeof(int));
   samples = (double *)gmallocn(nSamples, sizeof(double));
@@ -518,6 +532,12 @@ ExponentialFunction::ExponentialFunction(Object *funcObj, Dict *dict) {
       goto err2;
     }
     n = obj1.arrayGetLength();
+    if (n > funcMaxOutputs) {
+      error(errSyntaxError, -1,
+	    "Functions with more than {0:d} outputs are unsupported",
+	    funcMaxOutputs);
+      goto err2;
+    }
     for (i = 0; i < n; ++i) {
       obj1.arrayGet(i, &obj2);
       if (!obj2.isNum()) {
@@ -584,7 +604,7 @@ ExponentialFunction::~ExponentialFunction() {
 }
 
 ExponentialFunction::ExponentialFunction(ExponentialFunction *func) {
-  memcpy(this, func, sizeof(ExponentialFunction));
+  memcpy((void *)this, (void *)func, sizeof(ExponentialFunction));
 }
 
 void ExponentialFunction::transform(double *in, double *out) {
@@ -616,6 +636,7 @@ void ExponentialFunction::transform(double *in, double *out) {
 //------------------------------------------------------------------------
 
 StitchingFunction::StitchingFunction(Object *funcObj, Dict *dict,
+				     int expectedInputs, int expectedOutputs,
 				     int recursion) {
   Object obj1, obj2;
   int i;
@@ -636,7 +657,8 @@ StitchingFunction::StitchingFunction(Object *funcObj, Dict *dict,
   }
 
   //----- Functions
-  if (!dict->lookup("Functions", &obj1)->isArray()) {
+  if (!dict->lookup("Functions", &obj1)->isArray() ||
+      obj1.arrayGetLength() < 1) {
     error(errSyntaxError, -1,
 	  "Missing 'Functions' entry in stitching function");
     goto err1;
@@ -651,11 +673,14 @@ StitchingFunction::StitchingFunction(Object *funcObj, Dict *dict,
   }
   for (i = 0; i < k; ++i) {
     if (!(funcs[i] = Function::parse(obj1.arrayGet(i, &obj2),
+				     expectedInputs, expectedOutputs,
 				     recursion + 1))) {
       goto err2;
     }
-    if (funcs[i]->getInputSize() != 1 ||
-	(i > 0 && funcs[i]->getOutputSize() != funcs[0]->getOutputSize())) {
+    if (i == 0) {
+      n = funcs[0]->getOutputSize();
+    }
+    if (funcs[i]->getInputSize() != 1 || funcs[i]->getOutputSize() != n) {
       error(errSyntaxError, -1,
 	    "Incompatible subfunctions in stitching function");
       goto err2;
@@ -725,7 +750,7 @@ StitchingFunction::StitchingFunction(Object *funcObj, Dict *dict,
 StitchingFunction::StitchingFunction(StitchingFunction *func) {
   int i;
 
-  memcpy(this, func, sizeof(StitchingFunction));
+  memcpy((void *)this, (void *)func, sizeof(StitchingFunction));
   funcs = (Function **)gmallocn(k, sizeof(Function *));
   for (i = 0; i < k; ++i) {
     funcs[i] = func->funcs[i]->copy();
@@ -781,6 +806,8 @@ void StitchingFunction::transform(double *in, double *out) {
 
 // This is not an enum, because we can't foreward-declare the enum
 // type in Function.h
+//
+// NB: This must be kept in sync with psOpNames[] below.
 #define psOpAbs       0
 #define psOpAdd       1
 #define psOpAnd       2
@@ -821,15 +848,17 @@ void StitchingFunction::transform(double *in, double *out) {
 #define psOpTrue     37
 #define psOpTruncate 38
 #define psOpXor      39
+// the push/j/jz ops are used internally (and are not listed in psOpNames[])
 #define psOpPush     40
 #define psOpJ        41
 #define psOpJz       42
 
-#define nPSOps 43
+#define nPSOps (sizeof(psOpNames) / sizeof(const char *))
 
 // Note: 'if' and 'ifelse' are parsed separately.
 // The rest are listed here in alphabetical order.
-// The index in this table is equivalent to the psOpXXX defines.
+//
+// NB: This must be kept in sync with the psOpXXX defines above.
 static const char *psOpNames[] = {
   "abs",
   "add",
@@ -923,7 +952,7 @@ PostScriptFunction::PostScriptFunction(Object *funcObj, Dict *dict) {
   //----- parse the function
   if (tokens->getLength() < 1 ||
       ((GString *)tokens->get(0))->cmp("{")) {
-    error(errSyntaxError, -1, "Expected '{' at start of PostScript function");
+    error(errSyntaxError, -1, "Expected '{{' at start of PostScript function");
     goto err2;
   }
   tokPtr = 1;
@@ -949,7 +978,7 @@ PostScriptFunction::PostScriptFunction(Object *funcObj, Dict *dict) {
 }
 
 PostScriptFunction::PostScriptFunction(PostScriptFunction *func) {
-  memcpy(this, func, sizeof(PostScriptFunction));
+  memcpy((void *)this, (void *)func, sizeof(PostScriptFunction));
   codeString = func->codeString->copy();
   code = (PSCode *)gmallocn(codeSize, sizeof(PSCode));
   memcpy(code, func->code, codeSize * sizeof(PSCode));
@@ -1158,7 +1187,7 @@ GString *PostScriptFunction::getToken(Stream *str) {
       delete s;
       return NULL;
     }
-    codeString->append(c);
+    codeString->append((char)c);
     if (comment) {
       if (c == '\x0a' || c == '\x0d') {
 	comment = gFalse;
@@ -1179,7 +1208,7 @@ GString *PostScriptFunction::getToken(Stream *str) {
 	break;
       }
       str->getChar();
-      codeString->append(c);
+      codeString->append((char)c);
     }
   } else {
     while (1) {
@@ -1189,7 +1218,7 @@ GString *PostScriptFunction::getToken(Stream *str) {
 	break;
       }
       str->getChar();
-      codeString->append(c);
+      codeString->append((char)c);
     }
   }
   return s;
@@ -1259,7 +1288,7 @@ int PostScriptFunction::exec(double *stack, int sp0) {
 	goto underflow;
       }
       nn = (int)stack[sp++];
-      if (nn < 0) {
+      if (nn < 0 || nn > psStackSize) {
 	goto invalidArg;
       }
       if (sp + nn > psStackSize) {
@@ -1293,6 +1322,9 @@ int PostScriptFunction::exec(double *stack, int sp0) {
     case psOpDiv:
       if (sp + 1 >= psStackSize) {
 	goto underflow;
+      }
+      if (stack[sp] == 0) {
+	goto invalidArg;
       }
       stack[sp + 1] = stack[sp + 1] / stack[sp];
       ++sp;
@@ -1360,7 +1392,11 @@ int PostScriptFunction::exec(double *stack, int sp0) {
       if (sp + 1 >= psStackSize) {
 	goto underflow;
       }
-      stack[sp + 1] = (int)stack[sp + 1] / (int)stack[sp];
+      k = (int)stack[sp];
+      if (k == 0) {
+	goto invalidArg;
+      }
+      stack[sp + 1] = (int)stack[sp + 1] / k;
       ++sp;
       break;
     case psOpIndex:
@@ -1368,8 +1404,8 @@ int PostScriptFunction::exec(double *stack, int sp0) {
 	goto underflow;
       }
       k = (int)stack[sp];
-      if (k < 0) {
-	goto invalidArg;
+      if (k < 0 || k > psStackSize) {
+        goto invalidArg;
       }
       if (sp + 1 + k >= psStackSize) {
 	goto underflow;
@@ -1406,7 +1442,11 @@ int PostScriptFunction::exec(double *stack, int sp0) {
       if (sp + 1 >= psStackSize) {
 	goto underflow;
       }
-      stack[sp + 1] = (int)stack[sp + 1] % (int)stack[sp];
+      k = (int)stack[sp];
+      if (k == 0) {
+	goto invalidArg;
+      }
+      stack[sp + 1] = (int)stack[sp + 1] % k;
       ++sp;
       break;
     case psOpMul:
@@ -1454,25 +1494,27 @@ int PostScriptFunction::exec(double *stack, int sp0) {
       }
       k = (int)stack[sp++];
       nn = (int)stack[sp++];
-      if (nn < 0) {
-	goto invalidArg;
+      if (k < -psStackSize || k > psStackSize || nn < 0 || nn > psStackSize) {
+        goto invalidArg;
       }
-      if (sp + nn > psStackSize) {
-	goto underflow;
-      }
-      if (k >= 0) {
-	k %= nn;
-      } else {
-	k = -k % nn;
-	if (k) {
-	  k = nn - k;
+      if (nn > 0) {
+	if (sp + nn > psStackSize) {
+	  goto underflow;
 	}
-      }
-      for (i = 0; i < nn; ++i) {
-	tmp[i] = stack[sp + i];
-      }
-      for (i = 0; i < nn; ++i) {
-	stack[sp + i] = tmp[(i + k) % nn];
+	if (k >= 0) {
+	  k %= nn;
+	} else {
+	  k = -k % nn;
+	  if (k) {
+	    k = nn - k;
+	  }
+	}
+	for (i = 0; i < nn; ++i) {
+	  tmp[i] = stack[sp + i];
+	}
+	for (i = 0; i < nn; ++i) {
+	  stack[sp + i] = tmp[(i + k) % nn];
+	}
       }
       break;
     case psOpRound:

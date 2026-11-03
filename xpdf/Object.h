@@ -11,16 +11,15 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma interface
-#endif
-
 #include <stdio.h>
 #include <string.h>
 #include "gtypes.h"
 #include "gmem.h"
 #include "gfile.h"
 #include "GString.h"
+#if MULTITHREADED
+#include "GMutex.h"
+#endif
 
 class XRef;
 class Array;
@@ -68,8 +67,12 @@ enum ObjType {
 // Object
 //------------------------------------------------------------------------
 
-#ifdef DEBUG_MEM
-#define initObj(t) ++numAlloc[type = t]
+#ifdef DEBUG_OBJECT_MEM
+#  if MULTITHREADED
+#    define initObj(t) gAtomicIncrement(&numAlloc[type = t])
+#  else
+#    define initObj(t) ++numAlloc[type = t]
+#  endif
 #else
 #define initObj(t) type = t
 #endif
@@ -161,7 +164,7 @@ public:
   // Array accessors.
   int arrayGetLength();
   void arrayAdd(Object *elem);
-  Object *arrayGet(int i, Object *obj);
+  Object *arrayGet(int i, Object *obj, int recursion = 0);
   Object *arrayGetNF(int i, Object *obj);
 
   // Dict accessors.
@@ -209,9 +212,14 @@ private:
     char *cmd;			//   command
   };
 
-#ifdef DEBUG_MEM
+#ifdef DEBUG_OBJECT_MEM
+#if MULTITHREADED
+  static GAtomicCounter		// number of each type of object
+    numAlloc[numObjTypes];	//   currently allocated
+#else
   static int			// number of each type of object
     numAlloc[numObjTypes];	//   currently allocated
+#endif
 #endif
 };
 
@@ -227,8 +235,8 @@ inline int Object::arrayGetLength()
 inline void Object::arrayAdd(Object *elem)
   { array->add(elem); }
 
-inline Object *Object::arrayGet(int i, Object *obj)
-  { return array->get(i, obj); }
+inline Object *Object::arrayGet(int i, Object *obj, int recursion)
+  { return array->get(i, obj, recursion); }
 
 inline Object *Object::arrayGetNF(int i, Object *obj)
   { return array->getNF(i, obj); }

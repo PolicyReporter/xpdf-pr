@@ -8,11 +8,9 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stddef.h>
+#include "gmempp.h"
+#include "Trace.h"
 #include "GlobalParams.h"
 #include "Object.h"
 #include "Array.h"
@@ -25,7 +23,7 @@
 #include "Gfx.h"
 #include "GfxState.h"
 #include "Annot.h"
-#include "Form.h"
+#include "AcroForm.h"
 #endif
 #include "Error.h"
 #include "Catalog.h"
@@ -62,7 +60,7 @@ void PDFRectangle::clipTo(PDFRectangle *rect) {
 // PageAttrs
 //------------------------------------------------------------------------
 
-PageAttrs::PageAttrs(PageAttrs *attrs, Dict *dict) {
+PageAttrs::PageAttrs(PageAttrs *attrs, Dict *dict, XRef *xref) {
   Object obj1;
 
   // get old/default values
@@ -71,7 +69,6 @@ PageAttrs::PageAttrs(PageAttrs *attrs, Dict *dict) {
     cropBox = attrs->cropBox;
     haveCropBox = attrs->haveCropBox;
     rotate = attrs->rotate;
-    attrs->resources.copy(&resources);
   } else {
     // set default MediaBox to 8.5" x 11" -- this shouldn't be necessary
     // but some (non-compliant) PDF files don't specify a MediaBox
@@ -82,7 +79,6 @@ PageAttrs::PageAttrs(PageAttrs *attrs, Dict *dict) {
     cropBox.x1 = cropBox.y1 = cropBox.x2 = cropBox.y2 = 0;
     haveCropBox = gFalse;
     rotate = 0;
-    resources.initNull();
   }
 
   // media box
@@ -135,12 +131,59 @@ PageAttrs::PageAttrs(PageAttrs *attrs, Dict *dict) {
   obj1.free();
 
   // resource dictionary
-  dict->lookup("Resources", &obj1);
-  if (obj1.isDict()) {
-    resources.free();
-    obj1.copy(&resources);
+  Object childResDictObj;
+  dict->lookup("Resources", &childResDictObj);
+  if (attrs && attrs->resources.isDict() && childResDictObj.isDict()) {
+    // merge this node's resources into the parent's resources
+    // (some PDF files violate the PDF spec and expect this merging)
+    resources.initDict(xref);
+    Dict *resDict = resources.getDict();
+    Dict *parentResDict = attrs->resources.getDict();
+    for (int i = 0; i < parentResDict->getLength(); ++i) {
+      char *resType = parentResDict->getKey(i);
+      Object subdictObj1;
+      if (parentResDict->getVal(i, &subdictObj1)->isDict()) {
+	Dict *subdict1 = subdictObj1.getDict();
+	Object subdictObj2;
+	subdictObj2.initDict(xref);
+	Dict *subdict2 = subdictObj2.getDict();
+	for (int j = 0; j < subdict1->getLength(); ++j) {
+	  subdict1->getValNF(j, &obj1);
+	  subdict2->add(copyString(subdict1->getKey(j)), &obj1);
+	}
+	resDict->add(copyString(resType), &subdictObj2);
+      }
+      subdictObj1.free();
+    }
+    Dict *childResDict = childResDictObj.getDict();
+    for (int i = 0; i < childResDict->getLength(); ++i) {
+      char *resType = childResDict->getKey(i);
+      Object subdictObj1;
+      if (childResDict->getVal(i, &subdictObj1)->isDict()) {
+	Object subdictObj2;
+	if (resDict->lookup(resType, &subdictObj2)->isDict()) {
+	  Dict *subdict1 = subdictObj1.getDict();
+	  Dict *subdict2 = subdictObj2.getDict();
+	  for (int j = 0; j < subdict1->getLength(); ++j) {
+	    subdict1->getValNF(j, &obj1);
+	    subdict2->add(copyString(subdict1->getKey(j)), &obj1);
+	  }
+	  subdictObj2.free();
+	} else {
+	  subdictObj2.free();
+	  resDict->add(copyString(resType), subdictObj1.copy(&subdictObj2));
+	}
+      }
+      subdictObj1.free();
+    }
+  } else if (attrs && attrs->resources.isDict()) {
+    attrs->resources.copy(&resources);
+  } else if (childResDictObj.isDict()) {
+    childResDictObj.copy(&resources);
+  } else {
+    resources.initNull();
   }
-  obj1.free();
+  childResDictObj.free();
 }
 
 PageAttrs::PageAttrs() {
@@ -158,6 +201,7 @@ PageAttrs::PageAttrs() {
   metadata.initNull();
   pieceInfo.initNull();
   separationInfo.initNull();
+  userUnit = 1;
   resources.initNull();
 }
 
@@ -216,6 +260,27 @@ GBool PageAttrs::readBox(Dict *dict, const char *key, PDFRectangle *box) {
     }
     obj2.free();
     if (ok) {
+      // limit the box coords so they can be converted to 32-bit ints later
+      if (tmp.x1 < -1e9) {
+	tmp.x1 = -1e9;
+      } else if (tmp.x1 > 1e9) {
+	tmp.x1 = 1e9;
+      }
+      if (tmp.y1 < -1e9) {
+	tmp.y1 = -1e9;
+      } else if (tmp.y1 > 1e9) {
+	tmp.y1 = 1e9;
+      }
+      if (tmp.x2 < -1e9) {
+	tmp.x2 = -1e9;
+      } else if (tmp.x2 > 1e9) {
+	tmp.x2 = 1e9;
+      }
+      if (tmp.y2 < -1e9) {
+	tmp.y2 = -1e9;
+      } else if (tmp.y2 > 1e9) {
+	tmp.y2 = 1e9;
+      }
       if (tmp.x1 > tmp.x2) {
 	t = tmp.x1; tmp.x1 = tmp.x2; tmp.x2 = t;
       }
@@ -266,12 +331,22 @@ Page::Page(PDFDoc *docA, int numA, Dict *pageDict, PageAttrs *attrsA) {
     goto err1;
   }
 
+  // thumbnail
+  pageDict->lookupNF("Thumb", &thumbnail);
+  if (!thumbnail.isRef()) {
+    if (!thumbnail.isNull()) {
+      thumbnail.free();
+      thumbnail.initNull();
+    }
+  }
+
   return;
 
  err2:
   annots.initNull();
  err1:
   contents.initNull();
+  thumbnail.initNull();
   ok = gFalse;
 }
 
@@ -282,6 +357,7 @@ Page::Page(PDFDoc *docA, int numA) {
   attrs = new PageAttrs();
   annots.initNull();
   contents.initNull();
+  thumbnail.initNull();
   ok = gTrue;
 }
 
@@ -289,6 +365,7 @@ Page::~Page() {
   delete attrs;
   annots.free();
   contents.free();
+  thumbnail.free();
 }
 
 Links *Page::getLinks() {
@@ -300,17 +377,19 @@ Links *Page::getLinks() {
   return links;
 }
 
-void Page::display(OutputDev *out, double hDPI, double vDPI,
+void Page::display(OutputDev *out, LocalParams *localParams,
+		   double hDPI, double vDPI,
 		   int rotate, GBool useMediaBox, GBool crop,
 		   GBool printing,
 		   GBool (*abortCheckCbk)(void *data),
 		   void *abortCheckCbkData) {
-  displaySlice(out, hDPI, vDPI, rotate, useMediaBox, crop,
+  displaySlice(out, localParams, hDPI, vDPI, rotate, useMediaBox, crop,
 	       -1, -1, -1, -1, printing,
 	       abortCheckCbk, abortCheckCbkData);
 }
 
-void Page::displaySlice(OutputDev *out, double hDPI, double vDPI,
+void Page::displaySlice(OutputDev *out, LocalParams *localParams,
+			double hDPI, double vDPI,
 			int rotate, GBool useMediaBox, GBool crop,
 			int sliceX, int sliceY, int sliceW, int sliceH,
 			GBool printing,
@@ -321,8 +400,7 @@ void Page::displaySlice(OutputDev *out, double hDPI, double vDPI,
   PDFRectangle box;
   Gfx *gfx;
   Object obj;
-  Annots *annotList;
-  Form *form;
+  AcroForm *form;
   int i;
 
   if (!out->checkPageSlice(this, hDPI, vDPI, rotate, useMediaBox, crop,
@@ -330,6 +408,8 @@ void Page::displaySlice(OutputDev *out, double hDPI, double vDPI,
 			   printing, abortCheckCbk, abortCheckCbkData)) {
     return;
   }
+
+  traceBegin(this, "begin page");
 
   rotate += getRotate();
   if (rotate >= 360) {
@@ -351,48 +431,48 @@ void Page::displaySlice(OutputDev *out, double hDPI, double vDPI,
     printf("***** Rotate = %d\n", attrs->getRotate());
   }
 
-  gfx = new Gfx(doc, out, num, attrs->getResourceDict(),
+  gfx = new Gfx(doc, out, localParams, num, attrs->getResourceDict(),
 		hDPI, vDPI, &box, crop ? cropBox : (PDFRectangle *)NULL,
 		rotate, abortCheckCbk, abortCheckCbkData);
   contents.fetch(xref, &obj);
   if (!obj.isNull()) {
     gfx->saveState();
     gfx->display(&contents);
-    while (gfx->getState()->hasSaves()) {
-      gfx->restoreState();
-    }
-  } else {
-    // empty pages need to call dump to do any setup required by the
-    // OutputDev
-    out->dump();
+    gfx->endOfPage();
   }
   obj.free();
 
   // draw (non-form) annotations
   if (globalParams->getDrawAnnotations()) {
-    annotList = new Annots(doc, getAnnots(&obj));
-    obj.free();
-    annotList->generateAnnotAppearances();
-    if (annotList->getNumAnnots() > 0) {
+    Annots *annots2 = doc->getAnnots();
+    annots2->generateAnnotAppearances(num);
+    int n = annots2->getNumAnnots(num);
+    if (n > 0) {
       if (globalParams->getPrintCommands()) {
 	printf("***** Annotations\n");
       }
-      for (i = 0; i < annotList->getNumAnnots(); ++i) {
-	annotList->getAnnot(i)->draw(gfx, printing);
+      for (i = 0; i < n; ++i) {
+	if (abortCheckCbk && (*abortCheckCbk)(abortCheckCbkData)) {
+	  break;
+	}
+	annots2->getAnnot(num, i)->draw(gfx, printing);
       }
-      out->dump();
     }
-    delete annotList;
   }
 
   // draw form fields
-  if ((form = doc->getCatalog()->getForm())) {
-    form->draw(num, gfx, printing);
-    out->dump();
+  if (globalParams->getDrawFormFields()) {
+    if ((form = doc->getCatalog()->getForm())) {
+      if (!(abortCheckCbk && (*abortCheckCbk)(abortCheckCbkData))) {
+	form->draw(num, gfx, printing);
+      }
+    }
   }
 
   delete gfx;
-#endif
+#endif // PDF_PARSER_ONLY
+
+  traceEnd(this, "end page");
 }
 
 void Page::makeBox(double hDPI, double vDPI, int rotate,
@@ -480,7 +560,7 @@ void Page::getDefaultCTM(double *ctm, double hDPI, double vDPI,
   } else if (rotate < 0) {
     rotate += 360;
   }
-  state = new GfxState(hDPI, vDPI,
+  state = new GfxState(NULL, hDPI, vDPI,
 		       useMediaBox ? getMediaBox() : getCropBox(),
 		       rotate, upsideDown);
   for (i = 0; i < 6; ++i) {
@@ -489,3 +569,4 @@ void Page::getDefaultCTM(double *ctm, double hDPI, double vDPI,
   delete state;
 }
 #endif
+

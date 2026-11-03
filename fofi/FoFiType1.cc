@@ -8,13 +8,10 @@
 
 #include <aconf.h>
 
-#ifdef USE_GCC_PRAGMAS
-#pragma implementation
-#endif
-
 #include <stdlib.h>
 #include <string.h>
 #include "gmem.h"
+#include "gmempp.h"
 #include "FoFiEncodings.h"
 #include "FoFiType1.h"
 
@@ -98,7 +95,7 @@ void FoFiType1::writeEncoded(const char **newEncoding,
 
   // copy everything up to the encoding
   for (line = (char *)file;
-       line && strncmp(line, "/Encoding", 9);
+       line && line + 9 <= (char *)file + len && strncmp(line, "/Encoding", 9);
        line = getNextLine(line)) ;
   if (!line) {
     // no encoding - just copy the whole font file
@@ -113,7 +110,7 @@ void FoFiType1::writeEncoded(const char **newEncoding,
 		"0 1 255 {1 index exch /.notdef put} for\n", 40);
   for (i = 0; i < 256; ++i) {
     if (newEncoding[i]) {
-      sprintf(buf, "dup %d /%s put\n", i, newEncoding[i]);
+      snprintf(buf, sizeof(buf), "dup %d /%s put\n", i, newEncoding[i]);
       (*outputFunc)(outputStream, buf, (int)strlen(buf));
     }
   }
@@ -121,7 +118,8 @@ void FoFiType1::writeEncoded(const char **newEncoding,
   
   // find the end of the encoding data
   //~ this ought to parse PostScript tokens
-  if (!strncmp(line, "/Encoding StandardEncoding def", 30)) {
+  if (line + 30 <= (char *)file + len && 
+      !strncmp(line, "/Encoding StandardEncoding def", 30)) {
     line = getNextLine(line);
   } else {
     // skip "/Encoding" + one whitespace char,
@@ -143,16 +141,18 @@ void FoFiType1::writeEncoded(const char **newEncoding,
   // check for a second one here
   if (line) {
     for (line2 = line, i = 0;
-	 i < 20 && line2 && strncmp(line2, "/Encoding", 9);
+	 i < 20 && line2 && line2 + 9 <= (char *)file + len &&
+	   strncmp(line2, "/Encoding", 9);
 	 line2 = getNextLine(line2), ++i) ;
     if (i < 20 && line2) {
       (*outputFunc)(outputStream, line, (int)(line2 - line));
-      if (!strncmp(line2, "/Encoding StandardEncoding def", 30)) {
+      if (line2 + 30 <= (char *)file + len && 
+	  !strncmp(line2, "/Encoding StandardEncoding def", 30)) {
 	line = getNextLine(line2);
       } else {
-	// skip "/Encoding" + one whitespace char,
+	// skip "/Encoding",
 	// then look for 'def' preceded by PostScript whitespace
-	p = line2 + 10;
+	p = line2 + 9;
 	line = NULL;
 	for (; p < (char *)file + len; ++p) {
 	  if ((*p == ' ' || *p == '\t' || *p == '\x0a' ||
@@ -193,18 +193,24 @@ void FoFiType1::parse() {
   char *line, *line1, *p, *p2;
   char buf[256];
   char c;
-  int n, code, base, i, j;
-  GBool gotMatrix;
+  unsigned int code;
+  int n, base, i, j;
+  GBool gotMatrix, startsWithDup, endsWithDup;
 
   gotMatrix = gFalse;
   for (i = 1, line = (char *)file;
-       i <= 100 && line && (!name || !encoding);
+       i <= 100 && line && (!name || !encoding || !gotMatrix);
        ++i) {
 
     // get font name
-    if (!name && !strncmp(line, "/FontName", 9)) {
-      strncpy(buf, line, 255);
-      buf[255] = '\0';
+    if (!name && line + 9 <= (char *)file + len &&
+	!strncmp(line, "/FontName", 9)) {
+      n = 255;
+      if (line + n > (char *)file + len) {
+	n = (int)(((char *)file + len) - line);
+      }
+      strncpy(buf, line, n);
+      buf[n] = '\0';
       if ((p = strchr(buf+9, '/')) &&
 	  (p = strtok(p+1, " \t\n\r"))) {
 	name = copyString(p);
@@ -212,10 +218,10 @@ void FoFiType1::parse() {
       line = getNextLine(line);
 
     // get encoding
-    } else if (!encoding &&
+    } else if (!encoding && line + 30 <= (char *)file + len &&
 	       !strncmp(line, "/Encoding StandardEncoding def", 30)) {
       encoding = (char **)fofiType1StandardEncoding;
-    } else if (!encoding &&
+    } else if (!encoding && line + 19 <= (char *)file + len &&
 	       !strncmp(line, "/Encoding 256 array", 19)) {
       encoding = (char **)gmallocn(256, sizeof(char *));
       for (j = 0; j < 256; ++j) {
@@ -230,9 +236,14 @@ void FoFiType1::parse() {
 	strncpy(buf, line, n);
 	buf[n] = '\0';
 	for (p = buf; *p == ' ' || *p == '\t'; ++p) ;
-	if (!strncmp(p, "dup", 3)) {
-	  while (1) {
+	endsWithDup = !strncmp(line - 4, "dup\x0a", 4) ||
+	              !strncmp(line - 5, "dup\x0d", 4);
+	startsWithDup = !strncmp(p, "dup", 3);
+	if (endsWithDup || startsWithDup) {
+	  if (startsWithDup) {
 	    p += 3;
+	  }
+	  while (1) {
 	    for (; *p == ' ' || *p == '\t'; ++p) ;
 	    code = 0;
 	    if (*p == '8' && p[1] == '#') {
@@ -252,9 +263,10 @@ void FoFiType1::parse() {
 	    }
 	    ++p;
 	    for (p2 = p; *p2 && *p2 != ' ' && *p2 != '\t'; ++p2) ;
-	    if (code >= 0 && code < 256) {
+	    if (code < 256) {
 	      c = *p2;
 	      *p2 = '\0';
+	      gfree(encoding[code]);
 	      encoding[code] = copyString(p);
 	      *p2 = c;
 	    }
@@ -266,6 +278,7 @@ void FoFiType1::parse() {
 	    if (strncmp(p, "dup", 3)) {
 	      break;
 	    }
+	    p += 3;
 	  }
 	} else {
 	  if (strtok(buf, " \t") &&
@@ -276,9 +289,14 @@ void FoFiType1::parse() {
       }
       //~ check for getinterval/putinterval junk
 
-    } else if (!gotMatrix && !strncmp(line, "/FontMatrix", 11)) {
-      strncpy(buf, line + 11, 255);
-      buf[255] = '\0';
+    } else if (!gotMatrix && line + 11 <= (char *)file + len &&
+	       !strncmp(line, "/FontMatrix", 11)) {
+      n = 255;
+      if (line + 11 + n > (char *)file + len) {
+	n = (int)(((char *)file + len) - (line + 11));
+      }
+      strncpy(buf, line + 11, n);
+      buf[n] = '\0';
       if ((p = strchr(buf, '['))) {
 	++p;
 	if ((p2 = strchr(p, ']'))) {
